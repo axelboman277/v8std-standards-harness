@@ -174,7 +174,7 @@ console.log('\n1d. Правила gate');
 {
   const files = { 'log.md': evidence([SENTINEL, '[v8std sentinel: id=std999, status=found, phase=x]', APPLIED, DISCOVERED_NOT_RELEVANT]) };
   const { code, out } = run(files, { config: { profile: 'gate', sentinelId: 'std450' } });
-  check('gate: второй sentinel с чужим id = BLOCK', code === 2 && /does not match configured/.test(out), `exit=${code} ${out}`);
+  check('gate: второй sentinel с чужим id = BLOCK', code === 2 && /not among configured/.test(out), `exit=${code} ${out}`);
 }
 {
   const { code, out } = run({ 'log.md': `# Док\n\n## v8std evidence example\n\n${APPLIED}\n${SENTINEL}\n` }, { profile: 'gate' });
@@ -337,6 +337,49 @@ console.log('\n1g. Промоут-гейт и схема конфига');
   check('вложенный комментарий не скрывает повреждённую запись', code === 2 && /Malformed/.test(out), `exit=${code} ${out}`);
 }
 
+{
+  // Заголовок секции уровня 3 — обычное оформление внутри отчёта задачи.
+  const doc = `# Отчёт
+
+## Итоги
+
+### v8std evidence
+
+${SENTINEL}
+${APPLIED}
+${DISCOVERED_NOT_RELEVANT}
+`;
+  const { code, out } = run({ 'final-report.md': doc }, { config: { profile: 'gate', sentinelId: 'std450' } });
+  check('секция уровня 3 распознаётся как настоящая', code === 0, `exit=${code} ${out}`);
+}
+{
+  // Валидная H2-секция не должна прикрывать повреждённую запись в H3-секции.
+  const doc = `## v8std evidence
+
+${SENTINEL}
+${APPLIED}
+${DISCOVERED_NOT_RELEVANT}
+
+### v8std evidence
+
+[v8std applied phase=broken]
+`;
+  const { code, out } = run({ 'log.md': doc }, { config: { profile: 'gate', sentinelId: 'std450' } });
+  check('повреждённая запись в соседней секции не прикрывается валидной', code === 2 && /Malformed/.test(out), `exit=${code} ${out}`);
+}
+{
+  // Закомментированная запись + внешний маркер в той же строке: прежняя логика
+  // засчитывала запись из комментария.
+  const doc = `## v8std evidence
+
+<!-- ${SENTINEL} --> [v8std
+${APPLIED}
+[v8std skipped: phase=x, scope=y, planned_ids=[std1], reason=timeout, retries=3]
+`;
+  const { code, out } = run({ 'log.md': doc }, { config: { profile: 'gate', sentinelId: 'std450' } });
+  check('запись из комментария не засчитывается при внешнем маркере рядом', code === 2, `exit=${code} ${out}`);
+}
+
 // --- 2. Fail-open регрессии --------------------------------------------------
 
 console.log('\n2. Fail-open регрессии (главная группа)');
@@ -394,7 +437,7 @@ console.log('\n2. Fail-open регрессии (главная группа)');
 {
   const files = { 'log.md': evidence(['[v8std sentinel: id=std123, status=found, phase=implement]']) };
   const { code, out } = run(files, { config: { sentinelId: 'std450' } });
-  check('sentinel с чужим id = BLOCK (дрейфующий sentinel ничего не детектирует)', code === 2 && /does not match configured/.test(out), `exit=${code}`);
+  check('sentinel с чужим id = BLOCK (дрейфующий sentinel ничего не детектирует)', code === 2 && /not among configured/.test(out), `exit=${code}`);
 }
 {
   const files = { 'log.md': evidence([APPLIED, DISCOVERED_NOT_RELEVANT, SENTINEL]) };
@@ -438,6 +481,27 @@ console.log('\n2. Fail-open регрессии (главная группа)');
 }
 
 // --- итог --------------------------------------------------------------------
+
+// --- 3. След обязательного поиска --------------------------------------------
+
+console.log('\n3. След обязательного поиска');
+
+{
+  const line = '[v8std skipped: phase=x, scope=no-matching-situation, planned_ids=[std450], reason=no_matching_situation, retries=3]';
+  const { code, out } = run({ 'log.md': evidence([SENTINEL, line]) }, { config: { profile: 'gate', sentinelId: 'std450' } });
+  check('gate: «триггеров нет» без записи о поиске = BLOCK', code === 2 && /no \[v8std discovered/.test(out), `exit=${code} ${out}`);
+}
+{
+  const skip = '[v8std skipped: phase=x, scope=no-matching-situation, planned_ids=[std450], reason=no_matching_situation, retries=3]';
+  const found = '[v8std discovered: phase=x, scope=no-matching-situation, query="проведение документа", top_ids=[std450], new_ids=[], decision=not_relevant]';
+  const { code, out } = run({ 'log.md': evidence([SENTINEL, skip, found]) }, { config: { profile: 'gate', sentinelId: 'std450' } });
+  check('gate: «триггеров нет» + запись о поиске = чисто', code === 0, `exit=${code} ${out}`);
+}
+{
+  const line = '[v8std skipped: phase=x, scope=y, planned_ids=[std450], reason=timeout, retries=3]';
+  const { code, out } = run({ 'log.md': evidence([SENTINEL, line]) }, { config: { profile: 'gate', sentinelId: 'std450' } });
+  check('gate: реальный отказ сервиса не требует записи о поиске', code === 0, `exit=${code} ${out}`);
+}
 
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed > 0 ? 1 : 0);

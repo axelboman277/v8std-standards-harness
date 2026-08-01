@@ -44,7 +44,10 @@ const REQUIRED_KEYS = {
 const SCOPE_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/; // kebab-case
 
 // Только точный заголовок секции; допускаются лишь закрывающие решётки и пробелы.
-const SECTION_HEADING_RE = /^##\s+v8std evidence\s*#*\s*$/i;
+// Уровни 2 и 3: в отчёте задачи секция часто вложена в раздел и оформляется `###`.
+// Отвергать её значило бы рапортовать «записей нет» там, где они есть, — это ложное
+// обвинение в пропуске проверки, худшее из возможных для такого инструмента.
+const SECTION_HEADING_RE = /^(#{2,3})\s+v8std evidence\s*#*\s*$/i;
 
 const ALLOWED_REASON = new Set([
   'mcp_unavailable_after_3_retries',
@@ -73,8 +76,17 @@ const DEFAULT_CONFIG = {
   phases: null,            // null = любая непустая метка
   evidenceGlobs: null,     // null = все .md в каталоге, рекурсивно
   promoteReport: 'final-report.md',
-  sentinelId: null,        // null = id sentinel-записи не сверяется
+  sentinelId: null,        // строка или список; первый элемент — актуальный, остальные legacy
 };
+
+// Приводит sentinelId к списку. Список нужен, чтобы поднять эталон, не объявляя
+// нарушителями завершённые задачи с прежним номером: новые обязаны использовать
+// актуальный (первый), исторические остаются допустимыми.
+function sentinelIds(config) {
+  const raw = config.sentinelId;
+  if (raw === null || raw === undefined) return [];
+  return (Array.isArray(raw) ? raw : [raw]).map(String).filter(v => v.trim().length > 0);
+}
 
 const findings = []; // {severity: 'BLOCK'|'WARN', file, line, message}
 
@@ -110,39 +122,92 @@ function validateConfigSchema(config, source) {
       config[key] = null;
     }
   }
-  for (const key of ['promoteReport', 'sentinelId']) {
-    const value = config[key];
-    if (value === undefined || value === null) continue;
-    if (typeof value !== 'string') {
-      emit('BLOCK', where, 0, `Config field "${key}" must be a string`);
-      config[key] = null;
+  if (config.promoteReport !== undefined && config.promoteReport !== null
+      && typeof config.promoteReport !== 'string') {
+    emit('BLOCK', where, 0, 'Config field "promoteReport" must be a string');
+    config.promoteReport = null;
+  }
+  const sid = config.sentinelId;
+  if (sid !== undefined && sid !== null) {
+    const ok = typeof sid === 'string'
+      || (Array.isArray(sid) && sid.length > 0 && sid.every(v => typeof v === 'string'));
+    if (!ok) {
+      emit('BLOCK', where, 0, 'Config field "sentinelId" must be a string or a non-empty array of strings');
+      config.sentinelId = null;
     }
   }
 }
 
+// Поля, которые задают СТРОГОСТЬ проверки. Проверяемая задача не вправе назначать их
+// себе: подложив в свой каталог конфиг с чужим sentinelId, она принимала бы собственный
+// выдуманный sentinel и проходила гейт. Правила задаёт проект, а не объект проверки.
+const AUTHORITATIVE_KEYS = ['profile', 'sentinelId', 'phases'];
+
+function readConfigFile(file) {
+  let parsed;
+  try {
+    parsed = JSON.parse(readTextFile(file));
+  } catch (error) {
+    emit('BLOCK', file, 0, `Cannot parse config: ${error.message}`);
+    return null;
+  }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    emit('BLOCK', file, 0, 'Config must be a JSON object');
+    return null;
+  }
+  return parsed;
+}
+
 function loadConfig(taskDir, explicitPath) {
-  const candidates = explicitPath
-    ? [explicitPath]
-    : [path.join(taskDir, 'v8std.config.json'), path.join(process.cwd(), 'v8std.config.json')];
-  for (const candidate of candidates) {
-    if (!fs.existsSync(candidate)) continue;
-    let parsed;
-    try {
-      parsed = JSON.parse(readTextFile(candidate));
-    } catch (error) {
-      emit('BLOCK', candidate, 0, `Cannot parse config: ${error.message}`);
-      return { ...DEFAULT_CONFIG, _broken: true };
+  // Явно переданный путь считаем доверенным: его указывает тот, кто запускает проверку.
+  if (explicitPath) {
+    if (!fs.existsSync(explicitPath)) {
+      emit('BLOCK', explicitPath, 0, `Config not found: ${explicitPath}`);
+      return { ...DEFAULT_CONFIG };
     }
-    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      emit('BLOCK', candidate, 0, 'Config must be a JSON object');
-      return { ...DEFAULT_CONFIG, _broken: true };
-    }
-    const merged = { ...DEFAULT_CONFIG, ...parsed, _source: candidate };
-    validateConfigSchema(merged, candidate);
+    const parsed = readConfigFile(explicitPath);
+    if (!parsed) return { ...DEFAULT_CONFIG, _broken: true };
+    const merged = { ...DEFAULT_CONFIG, ...parsed, _source: explicitPath };
+    validateConfigSchema(merged, explicitPath);
     return merged;
   }
-  if (explicitPath) emit('BLOCK', explicitPath, 0, `Config not found: ${explicitPath}`);
-  return { ...DEFAULT_CONFIG };
+
+  const projectPath = path.join(process.cwd(), 'v8std.config.json');
+  const taskPath = path.join(taskDir, 'v8std.config.json');
+  const sameFile = path.resolve(projectPath) === path.resolve(taskPath);
+
+  let config = { ...DEFAULT_CONFIG };
+  let source = null;
+
+  if (fs.existsSync(projectPath)) {
+    const parsed = readConfigFile(projectPath);
+    if (!parsed) return { ...DEFAULT_CONFIG, _broken: true };
+    config = { ...config, ...parsed };
+    source = projectPath;
+  }
+
+  if (!sameFile && fs.existsSync(taskPath)) {
+    const parsed = readConfigFile(taskPath);
+    if (!parsed) return { ...DEFAULT_CONFIG, _broken: true };
+    if (source) {
+      // Проектный конфиг уже задал строгость: из локального берём только раскладку.
+      const rejected = AUTHORITATIVE_KEYS.filter(k => k in parsed);
+      if (rejected.length > 0) {
+        emit('WARN', taskPath, 0, `Task-local config cannot override ${rejected.join(', ')} — project config wins`);
+      }
+      for (const key of Object.keys(parsed)) {
+        if (!AUTHORITATIVE_KEYS.includes(key)) config[key] = parsed[key];
+      }
+    } else {
+      // Проектного конфига нет — локальный используется целиком (автономный запуск).
+      config = { ...config, ...parsed };
+      source = taskPath;
+    }
+  }
+
+  config._source = source;
+  if (source) validateConfigSchema(config, source);
+  return config;
 }
 
 // --- разрешение путей: ЕДИНСТВЕННЫЙ источник раскладки ----------------------
@@ -422,13 +487,40 @@ function validateRecord(record, file, lineNo, config) {
     }
     // Сверяем ВСЕГДА, когда sentinelId настроен, — включая пустой или отсутствующий id.
     // Иначе пустое значение молча обходило бы весь третий слой.
-    if (config.sentinelId && String(fields.id ?? '') !== config.sentinelId) {
-      emit('BLOCK', file, lineNo, `Sentinel id "${fields.id ?? ''}" does not match configured sentinelId "${config.sentinelId}" — a drifting sentinel detects nothing`);
+    const allowed = sentinelIds(config);
+    if (allowed.length > 0 && !allowed.includes(String(fields.id ?? ''))) {
+      emit('BLOCK', file, lineNo, `Sentinel id "${fields.id ?? ''}" is not among configured sentinelId [${allowed.join(', ')}] — a drifting sentinel detects nothing`);
+    } else if (config.profile === 'gate' && allowed.length > 1 && String(fields.id ?? '') !== allowed[0]) {
+      // Только в строгом режиме: завершённые задачи с прежним эталоном не должны
+      // становиться «грязными» на обычном прогоне.
+      emit('WARN', file, lineNo, `Sentinel id "${fields.id}" is a legacy value; new work must use "${allowed[0]}"`);
     }
   }
 }
 
 // --- сбор записей -----------------------------------------------------------
+
+// Вырезает содержимое HTML-комментариев, оставляя только видимый текст строки.
+// Комментарий закрывается первым `-->` (CommonMark, вложенности нет).
+function maskComments(line, inComment) {
+  let out = '';
+  let i = 0;
+  while (i < line.length) {
+    if (inComment) {
+      const close = line.indexOf('-->', i);
+      if (close < 0) return { visible: out, inComment: true };
+      i = close + 3;
+      inComment = false;
+      continue;
+    }
+    const open = line.indexOf('<!--', i);
+    if (open < 0) { out += line.slice(i); break; }
+    out += line.slice(i, open);
+    i = open + 4;
+    inComment = true;
+  }
+  return { visible: out, inComment };
+}
 
 function collectRecords(taskDir, config) {
   const collected = []; // {record, file, line}
@@ -438,6 +530,7 @@ function collectRecords(taskDir, config) {
     // считается пустым.
     const lines = readTextFile(file).replace(/^﻿/, '').split(/\r?\n/);
     let inSection = false;
+    let sectionLevel = 2;
     let inFence = false;
     let fenceChar = '';
     let fenceLen = 0;
@@ -453,7 +546,24 @@ function collectRecords(taskDir, config) {
       // Длина ограждения значима: по CommonMark закрыть блок может только ограждение
       // не короче открывающего. Без учёта длины ```` закрывалось ``` — и остаток
       // документации ошибочно становился «данными».
-      const fence = line.match(/^\s*(`{3,}|~{3,})/);
+      // Комментарии вырезаем ПЕРВЫМ делом и работаем дальше только с видимым текстом.
+      // Прежняя схема решала «пропустить строку или нет», а затем отдавала парсеру строку
+      // целиком — и он брал первую запись, которая лежала внутри комментария. Достаточно
+      // было приписать к закомментированной записи любой внешний маркер, чтобы выключенная
+      // запись засчиталась как настоящая.
+      const masked = maskComments(line, inComment);
+      inComment = masked.inComment;
+      const visible = masked.visible;
+      if (visible.trim().length === 0) continue;
+
+      // Различаем данные и иллюстрацию данных по положению ЗАГОЛОВКА секции, а не по
+      // наличию ограждения:
+      //   • заголовок внутри ``` — это пример в документации, записи под ним не считаются;
+      //   • заголовок снаружи — секция настоящая, и записи в ней считаются даже если
+      //     оформлены код-блоком (агенты часто так делают ради читаемости).
+      // Длина ограждения значима: по CommonMark закрыть блок может только ограждение
+      // не короче открывающего.
+      const fence = visible.match(/^\s*(`{3,}|~{3,})/);
       if (fence) {
         const marker = fence[1];
         if (!inFence) {
@@ -463,42 +573,20 @@ function collectRecords(taskDir, config) {
         }
         continue;
       }
-      // Закомментированная запись — это выключенная запись, где бы она ни лежала:
-      // внутри код-блока в том числе.
-      // Комментарий закрывается ПЕРВЫМ `-->` (как в CommonMark), вложенности нет.
-      // Подсчёт «открытий больше закрытий» ошибочно считал `<!-- <!-- -->` незакрытым
-      // и проглатывал остаток файла — безопасно, но по неверной причине.
-      if (inComment) {
-        const close = line.indexOf('-->');
-        if (close < 0) continue;
-        // Хвост после закрытия — обычный текст этой же строки.
-        const tail = line.slice(close + 3);
-        inComment = false;
-        if (!tail.includes('[v8std')) continue;
-      } else {
-        const open = line.indexOf('<!--');
-        if (open >= 0) {
-          const close = line.indexOf('-->', open + 4);
-          if (close < 0) {
-            // Комментарий не закрыт в этой строке: учитываем только текст до него.
-            inComment = true;
-            if (!line.slice(0, open).includes('[v8std')) continue;
-          } else if (/<!--[^]*?\[v8std/.test(line.slice(open, close + 3))) {
-            // Запись целиком внутри однострочного комментария — выключена.
-            const outside = line.slice(0, open) + line.slice(close + 3);
-            if (!outside.includes('[v8std')) continue;
-          }
-        }
-      }
 
       // Заголовок распознаётся ТОЛЬКО целиком: `## v8std evidence example` — это раздел
       // документации про формат, а не секция с данными.
-      if (!inFence && SECTION_HEADING_RE.test(line)) { inSection = true; continue; }
-      // Секцию закрывает любой заголовок уровня 1-2, а не только H2.
-      if (!inFence && inSection && /^#{1,2}\s+\S/.test(line)) { inSection = false; }
+      const heading = inFence ? null : visible.match(SECTION_HEADING_RE);
+      if (heading) { inSection = true; sectionLevel = heading[1].length; continue; }
+      // Секцию закрывает заголовок того же или более высокого уровня: секция уровня 3
+      // не должна обрываться вложенным в неё заголовком уровня 4.
+      if (!inFence && inSection) {
+        const other = visible.match(/^(#{1,6})\s+\S/);
+        if (other && other[1].length <= sectionLevel) inSection = false;
+      }
       // ...включая setext-форму: текст, подчёркнутый === или ---. Без этого записи
       // из следующего раздела продолжали считаться принадлежащими evidence-секции.
-      if (!inFence && inSection && line.trim() && !line.trim().startsWith('|')) {
+      if (!inFence && inSection && visible.trim() && !visible.trim().startsWith('|')) {
         const next = lines[i + 1];
         if (next !== undefined && /^\s{0,3}(=+|-{2,})\s*$/.test(next)) { inSection = false; }
       }
@@ -506,10 +594,10 @@ function collectRecords(taskDir, config) {
       // Любое упоминание маркера в активной секции — заявка на запись. Узкий шаблон
       // `[v8std <слово>:` пропускал строки без двоеточия и с переносом, то есть
       // нарушение оставалось невидимым.
-      if (!line.includes('[v8std')) continue;
-      const record = parseEvidenceLine(line);
+      if (!visible.includes('[v8std')) continue;
+      const record = parseEvidenceLine(visible);
       if (!record) {
-        emit('BLOCK', file, i + 1, `Malformed v8std evidence line: ${line.trim()}`);
+        emit('BLOCK', file, i + 1, `Malformed v8std evidence line: ${visible.trim()}`);
         continue;
       }
       collected.push({ record, file, line: i + 1 });
@@ -591,25 +679,37 @@ function validateGateCompleteness(taskDir, config, collected) {
 
   // sentinelId обязателен именно в gate: без него разные sentinel-записи не с чем сверять,
   // и третий слой превращается в декорацию.
-  if (!config.sentinelId || isBlank(config.sentinelId) || !STD_ID_RE.test(String(config.sentinelId))) {
+  const allowedSentinels = sentinelIds(config);
+  if (allowedSentinels.length === 0 || !allowedSentinels.every(v => STD_ID_RE.test(v))) {
     emit('BLOCK', taskDir, 0, `Gate profile requires a valid "sentinelId" in config (got ${JSON.stringify(config.sentinelId ?? null)}) — without it sentinel records cannot be verified.`);
   }
 
   const sentinels = collected.filter(c => c.record.type === 'sentinel');
   if (sentinels.length === 0) {
     emit('BLOCK', taskDir, 0, 'No [v8std sentinel: ...] record — index staleness was never checked.');
-  } else if (config.sentinelId) {
+  } else if (allowedSentinels.length > 0) {
     // Совпадающий по id sentinel обязан подтвердить, что индекс жив. `not_found` означает,
     // что источник истины протух: результаты этой сессии недостоверны.
-    const matching = sentinels.filter(c => String(c.record.fields.id ?? '') === config.sentinelId);
+    const matching = sentinels.filter(c => allowedSentinels.includes(String(c.record.fields.id ?? '')));
     const confirmed = matching.filter(c => c.record.fields.status === 'found');
     if (matching.length > 0 && confirmed.length === 0) {
       const anchor = matching[0];
-      emit('BLOCK', anchor.file, anchor.line, `Sentinel "${config.sentinelId}" reported status=not_found — the standards index is stale or unavailable, so this run's checks are not trustworthy.`);
+      emit('BLOCK', anchor.file, anchor.line, `Sentinel "${anchor.record.fields.id}" reported status=not_found — the standards index is stale or unavailable, so this run's checks are not trustworthy.`);
     }
   }
   if (!types.has('discovered') && !types.has('skipped')) {
     emit('BLOCK', taskDir, 0, 'No [v8std discovered: ...] and no [v8std skipped: ...] record — proactive discovery was never performed nor explicitly waived.');
+  }
+
+  // «Триггеров не нашлось» — это ВЫВОД ПОИСКА, а не право не искать. Контракт требует
+  // хотя бы один запрос к сервису даже когда ни одна ситуация не сработала. Без этого
+  // правила достаточно одной строки skipped, чтобы пройти гейт, не сделав ничего.
+  const waivedOnly = collected.some(c => c.record.type === 'skipped'
+    && c.record.fields.reason === 'no_matching_situation');
+  if (waivedOnly && !types.has('discovered')) {
+    const anchor = collected.find(c => c.record.type === 'skipped'
+      && c.record.fields.reason === 'no_matching_situation');
+    emit('BLOCK', anchor.file, anchor.line, 'reason=no_matching_situation claims no trigger matched, but there is no [v8std discovered: ...] record proving a search was actually run. Add the discovered record with the query used, or use a reason that reflects a real failure.');
   }
   if (Array.isArray(config.phases) && config.phases.length > 0) {
     const covered = new Set(
@@ -672,7 +772,7 @@ function main() {
   if (config.profile !== 'gate' && config.profile !== 'lint') {
     config.profile = 'gate';
   }
-
+  const activeProfile = config.profile;
   validatePack(taskDir, config);
 
   let block = 0;
@@ -682,7 +782,7 @@ function main() {
     if (f.severity === 'BLOCK') block++;
     else warn++;
   }
-  const suffix = `profile=${config.profile}`;
+  const suffix = `profile=${activeProfile}`;
   if (block > 0) {
     console.log(`v8std-evidence-validator: ${block} BLOCK, ${warn} WARN — strict-fail (${suffix})`);
     process.exit(2);

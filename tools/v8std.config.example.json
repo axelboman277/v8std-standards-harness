@@ -1,11 +1,18 @@
 {
   "profile": "gate",
-
-  "phases": ["design", "implement", "review"],
-
-  "evidenceGlobs": ["**/v8std-evidence.md", "**/*-context.md", "**/task-log.md"],
-
+  "phases": [
+    "design",
+    "implement",
+    "review"
+  ],
+  "evidenceGlobs": [
+    "**/v8std-evidence.md",
+    "**/*-context.md",
+    "**/task-log.md"
+  ],
   "promoteReport": "final-report.md",
-
-  "sentinelId": "std792"
+  "sentinelId": [
+    "std792",
+    "std450"
+  ]
 }
