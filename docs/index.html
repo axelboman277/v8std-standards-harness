@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>v8std-standards-harness — обвязка для работы со стандартами 1С</title>
+
+<meta name="description" content="Не даёт ИИ-агенту молча пропустить сверку со стандартами разработки 1С. Карта ситуаций, обязательный поиск, сторожевая проверка и машинный контроль отметок.">
+
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="v8std-standards-harness">
+<meta property="og:title" content="Обвязка для работы со стандартами разработки 1С">
+<meta property="og:description" content="Не даёт ИИ-агенту молча пропустить сверку со стандартами. Четыре слоя: карта ситуаций, обязательный поиск, сторожевая проверка индекса и машинный контроль отметок о проверке.">
+<meta property="og:url" content="https://axelboman277.github.io/v8std-standards-harness/">
+<meta property="og:image" content="https://axelboman277.github.io/v8std-standards-harness/social-preview.jpg">
+<meta property="og:image:type" content="image/jpeg">
+<meta property="og:image:width" content="1280">
+<meta property="og:image:height" content="640">
+<meta property="og:image:alt" content="Схема: работа агента проходит через четыре ступени контроля">
+
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Обвязка для работы со стандартами разработки 1С">
+<meta name="twitter:description" content="Не даёт ИИ-агенту молча пропустить сверку со стандартами. Четыре слоя контроля и машинная проверка отметок.">
+<meta name="twitter:image" content="https://axelboman277.github.io/v8std-standards-harness/social-preview.jpg">
+
+<style>
+  :root {
+    --bg: #f4f1ea; --ink: #22262b; --muted: #5b6470;
+    --line: #cfc9bd; --accent: #a8443a; --card: #fbf9f5;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #14171a; --ink: #e6e3dd; --muted: #9aa3ad;
+            --line: #2c3238; --accent: #e0776b; --card: #1b1f23; }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 16px/1.65 -apple-system, "Segoe UI", Roboto, sans-serif;
+    padding: 3rem 1.25rem 4rem;
+  }
+  main { max-width: 860px; margin: 0 auto; }
+  h1 { font-size: clamp(1.6rem, 4vw, 2.3rem); line-height: 1.2; margin: 0 0 .6rem; letter-spacing: -.01em; }
+  .lead { font-size: 1.1rem; color: var(--muted); margin: 0 0 2rem; }
+  figure { margin: 0 0 2.2rem; }
+  img { width: 100%; height: auto; display: block; border: 1px solid var(--line); border-radius: 6px; }
+  figcaption { font-size: .85rem; color: var(--muted); margin-top: .6rem; }
+  h2 { font-size: 1.15rem; margin: 2.2rem 0 .8rem; }
+  table { width: 100%; border-collapse: collapse; font-size: .93rem; }
+  th, td { text-align: left; padding: .55rem .7rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-weight: 600; color: var(--muted); font-size: .85rem; }
+  .cta { display: inline-block; margin-top: 2rem; padding: .7rem 1.3rem; background: var(--accent);
+         color: #fff; text-decoration: none; border-radius: 6px; font-weight: 600; }
+  .cta:hover { opacity: .9; }
+  code { background: var(--card); border: 1px solid var(--line); border-radius: 4px;
+         padding: .1rem .35rem; font-size: .88em; }
+  footer { margin-top: 3rem; padding-top: 1.2rem; border-top: 1px solid var(--line);
+           font-size: .85rem; color: var(--muted); }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Обвязка для работы со стандартами разработки 1С</h1>
+  <p class="lead">Не даёт ИИ-агенту молча пропустить сверку со стандартами при работе с BSL
+  и метаданными. Работает по правилу «запрет по умолчанию»: не подтверждено — не пропускаем.</p>
+
+  <figure>
+    <img src="social-preview.jpg" alt="Схема: работа агента проходит через четыре ступени контроля — карта ситуаций, поиск, сторожевая проверка и проверка отметок">
+    <figcaption>Работа агента идёт слева направо через четыре ступени. Найденное вне карты
+    возвращается в неё стрелкой PROMOTE; при недоступности сервиса срабатывают повторные
+    попытки и локальный кэш, а исход честно попадает в отметку SKIPPED.</figcaption>
+  </figure>
+
+  <h2>Проблема</h2>
+  <p>Вы написали агенту в инструкции: «сверяйся со стандартами разработки». Агент отвечает
+  «сверился». Иногда действительно сверяется. <strong>Отличить одно от другого невозможно</strong> —
+  невыполнение инструкции выглядит ровно так же, как выполнение.</p>
+
+  <h2>Четыре слоя</h2>
+  <table>
+    <tr><th>Слой</th><th>Что ловит</th><th>Что протекает без него</th></tr>
+    <tr><td>Карта ситуаций</td><td>Известные случаи: «пишешь запрос → std729/437/438»</td><td>Агент сверяется по памяти и по настроению</td></tr>
+    <tr><td>Обязательный поиск</td><td>Стандарты вне карты</td><td>Карта замерзает в моменте создания</td></tr>
+    <tr><td>Сторожевая проверка</td><td>Устаревший или недоступный указатель</td><td>«Ничего не нашлось» неотличимо от «сервис лежит»</td></tr>
+    <tr><td>Проверка отметок</td><td>Саму молчаливую деградацию</td><td>Первые три слоя остаются рекомендацией</td></tr>
+  </table>
+
+  <h2>Главная идея</h2>
+  <p>Пропуск разрешён, <strong>молчаливый</strong> пропуск — нет. Каждая проверка оставляет одну
+  машинно-читаемую строку, и <code>skipped</code> с причиной из закрытого списка — полноправный,
+  ожидаемый исход. Невозможен только третий вариант: не проверить и не сказать об этом.</p>
+
+  <a class="cta" href="https://github.com/axelboman277/v8std-standards-harness">Открыть репозиторий на GitHub</a>
+
+  <footer>
+    Тексты стандартов принадлежат правообладателям: первоисточник — ИТС фирмы «1С»,
+    удобный доступ — <a href="https://v8std.ru/">v8std.ru</a> и его MCP-сервис.
+    Репозиторий текстов стандартов не содержит — только указатели, контракт и инструментарий.
+  </footer>
+</main>
+</body>
+</html>
