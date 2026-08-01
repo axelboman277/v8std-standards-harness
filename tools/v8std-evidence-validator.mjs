@@ -435,6 +435,12 @@ function collectRecords(taskDir, config) {
       if (!inFence && SECTION_HEADING_RE.test(line)) { inSection = true; continue; }
       // Секцию закрывает любой заголовок уровня 1-2, а не только H2.
       if (!inFence && inSection && /^#{1,2}\s+\S/.test(line)) { inSection = false; }
+      // ...включая setext-форму: текст, подчёркнутый === или ---. Без этого записи
+      // из следующего раздела продолжали считаться принадлежащими evidence-секции.
+      if (!inFence && inSection && line.trim() && !line.trim().startsWith('|')) {
+        const next = lines[i + 1];
+        if (next !== undefined && /^\s{0,3}(=+|-{2,})\s*$/.test(next)) { inSection = false; }
+      }
       if (!inSection) continue;
       // Любое упоминание маркера в активной секции — заявка на запись. Узкий шаблон
       // `[v8std <слово>:` пропускал строки без двоеточия и с переносом, то есть

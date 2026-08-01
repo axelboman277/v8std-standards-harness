@@ -244,6 +244,18 @@ console.log('\n1f. Дубли ключей, границы блоков, malform
   check('запись без двоеточия = BLOCK, а не игнор', code === 2 && /Malformed/.test(out), `exit=${code} ${out}`);
 }
 {
+  // Setext-заголовок: текст, подчёркнутый ===. Тот же класс, что H1, но другой синтаксис.
+  const doc = `## v8std evidence\n\n${SENTINEL}\n\nЧужой раздел\n============\n\n${APPLIED}\n${DISCOVERED_NOT_RELEVANT}\n`;
+  const { code, out } = run({ 'log.md': doc }, { config: { profile: 'gate', sentinelId: 'std450' } });
+  check('setext-заголовок завершает секцию', code === 2, `exit=${code} ${out}`);
+}
+{
+  // Контроль: таблица внутри секции не должна восприниматься как setext-заголовок.
+  const doc = `## v8std evidence\n\n| поле | знач |\n|---|---|\n| a | b |\n\n${SENTINEL}\n${APPLIED}\n${DISCOVERED_NOT_RELEVANT}\n`;
+  const { code, out } = run({ 'log.md': doc }, { config: { profile: 'gate', sentinelId: 'std450' } });
+  check('таблица в секции не обрывает её', code === 0, `exit=${code} ${out}`);
+}
+{
   const doc = `## v8std evidence\n\n[v8std applied:\n phase=x, scope=y, ids_checked=[std450], conclusion=clean]\n`;
   const { code, out } = run({ 'log.md': doc });
   check('многострочная запись = BLOCK', code === 2 && /Malformed/.test(out), `exit=${code} ${out}`);
