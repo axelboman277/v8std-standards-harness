@@ -11,8 +11,8 @@
 > стандарты садится агент.
 
 > **Это curated subset, а не полное дерево.** Здесь 9 из 10 категорий (категория «Обмен
-> данными» не покрыта — см. «Границы покрытия»), внутри каждой — проверенный short-list.
-> Пропуски закрывает не полнота таблицы, а **обязательный `v8std_search` на каждой фазе**
+> данными» не покрыта — см. «Границы покрытия»), внутри каждой — проверенный короткий список.
+> Пропуски закрывает не полнота таблицы, а **обязательный `v8std_search` на каждой этапе**
 > (см. [`../SKILL.md`](../SKILL.md), раздел «Слой 2: proactive discovery»).
 
 ---
@@ -274,7 +274,7 @@ ID для справки — std701, std771, std637.
   `patterns:grasp:protected_variations`
 - `patterns:engineering:dry`, `patterns:engineering:kiss`, `patterns:engineering:yagni`,
   `patterns:engineering:rule_of_three`, `patterns:engineering:separation_of_concerns`
-- `patterns:gof` — 23 паттерна; на 1С реально приземляются единицы: `patterns:gof:strategy`,
+- `patterns:gof` — 23 приёма; на 1С реально применимы единицы: `patterns:gof:strategy`,
   `patterns:gof:facade`, `patterns:gof:observer`, `patterns:gof:command`,
   `patterns:gof:composite`, `patterns:gof:adapter`
 
@@ -293,4 +293,4 @@ ID для справки — std701, std771, std637.
 
 ---
 
-`last_reviewed_at: 2026-08-01` · при ревизии обновить дату и sentinel-ID в конфиге.
+`last_reviewed_at: 2026-08-01` · при ревизии обновить дату и sentinel-ID в настройках.
