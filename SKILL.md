@@ -100,7 +100,7 @@ description: >
 |------|---------------------|
 | `phase` | Любая непустая метка вашего процесса. Если задан `phases` в конфиге — сверяется по нему |
 | `scope` | Короткий kebab-case: `document-posting`, `new-common-module`, `query-virtual-table`, `no-matching-situation` |
-| ID-поля | `stdNNN`, `acc:NNN`, `bslls:Code`, `v8cs:code`, `patterns:alias` (и подстраницы `patterns:solid:single_responsibility`) |
+| ID-поля | `stdNNN` (`std450`), `acc:NNN` (`acc:105`), `bslls:Code` (`bslls:MissingSpace`), `v8cs:code` (`v8cs:module-region-empty`), `patterns:alias` и подстраницы (`patterns:solid:single_responsibility`). Списки не могут быть пустыми — кроме `new_ids`, где пустота законна |
 | `reason` | `mcp_unavailable_after_3_retries`, `timeout`, `auth_error`, `parse_error`, `tool_not_found`, `no_matching_situation`, `stale_or_unavailable_index` |
 | `decision` | `applied`, `noted`, `not_relevant` |
 | `conclusion` | `clean` или `violation:<id>` |
@@ -121,6 +121,10 @@ node tools/v8std-evidence-validator.mjs validate-pack <каталог> --lint   
 |---|---|
 | `lint` | Проверяет формат того, что нашёл. Ноль записей = чисто. Для ручного прогона |
 | `gate` | Fail-closed. Требует: минимум одну запись; sentinel с `id`, совпадающим с `sentinelId`; discovery или обоснованный skip. **Ноль записей = exit 2.** Для CI и pre-commit |
+
+Оба профиля отвергают записи с пустыми значениями обязательных полей
+(`id=`, `status=`, `query=`, `ids_checked=[]`): присутствие ключа без значения — имитация
+проверки, а не проверка.
 
 Коды выхода: `0` — чисто, `1` — только предупреждения, `2` — блокирующие нарушения.
 

@@ -23,10 +23,11 @@
 
 | Что делаешь | Куда смотреть |
 |---|---|
-| Выбираешь тип объекта: справочник / документ / регистр / ПВХ / определяемый тип | std467, std474, std477, std704 |
-| Создаёшь или правишь регистр (тип, измерения, ведущее измерение) | std477, std791, std728 |
+| Выбираешь тип объекта: справочник / документ / регистр / ПВХ / определяемый тип | std467, std474, std704 |
+| Проектируешь структуру регистра; логика или отчёт обращаются к полям регистратора | std477, std791, std728 |
 | Пишешь `ОбработкаПроведения`, движения регистров | std450, std603, std633, acc:105, std792 |
 | Пишешь `ПередЗаписью` / `ПриЗаписи` / `ОбработкаЗаполнения` | std464, std465, std773, std396 |
+| Пишешь `ОбработкаПроверкиЗаполнения` | std463, std478, std686 |
 | Добавляешь общий реквизит | std677 |
 | Удаляешь или переименовываешь объект метаданных | std534, std706 |
 | Настраиваешь роли, права, RLS | std488, std689, std491, std413, std470 |
@@ -51,6 +52,8 @@
 | std706 | Ограничения на переименование объектов | Хочешь переименовать объект; отдельно — прежде чем удалить общий модуль и создать новый с тем же именем |
 | std540 | Общие требования к регламентным заданиям | Заводишь регламентное задание |
 | std539 | Запуск регламентных заданий | Решаешь, как задание будет запускаться — по расписанию или вручную |
+| std463 | Обработчик события ОбработкаПроверкиЗаполнения | Пишешь `ОбработкаПроверкиЗаполнения`; проверка условная и зависит от других реквизитов |
+| std478 | Подсказка и проверка заполнения | Настраиваешь проверку заполнения реквизита |
 | std464 | Обработчик события ПередЗаписью | Пишешь `ПередЗаписью` объекта |
 | std465 | Обработчик события ПриЗаписи | Пишешь `ПриЗаписи` объекта |
 | std773 | ОбменДанными.Загрузка в обработчиках событий | Пишешь любой из обработчиков записи или удаления — до того, как забыл про флаг загрузки |
@@ -258,15 +261,22 @@ ID для справки — std701, std771, std637.
 | GOF | `patterns:gof` | Нужно имя для уже сложившегося решения |
 | Принципы ООП | `patterns:principles` | Решаешь, что делать экспортным, а что скрыть |
 
-**Подстраницы** (текст — только через MCP):
+**Подстраницы.** Идентификаторы приведены полностью — их можно передавать в
+`v8std_get_page` как есть (сокращённая запись `:single_responsibility` самостоятельным
+идентификатором не является):
 
-- `patterns:solid` → `:single_responsibility`, `:open_closed`, `:liskov_substitution`,
-  `:interface_segregation`, `:dependency_inversion`
-- `patterns:grasp` → `:information_expert`, `:creator`, `:controller`, `:low_coupling`,
-  `:high_cohesion`, `:polymorphism`, `:pure_fabrication`, `:indirection`, `:protected_variations`
-- `patterns:engineering` → `:dry`, `:kiss`, `:yagni`, `:rule_of_three`, `:separation_of_concerns`
-- `patterns:gof` → 23 паттерна; на 1С реально приземляются единицы: `:strategy`, `:facade`,
-  `:observer`, `:command`, `:composite`, `:adapter`
+- `patterns:solid:single_responsibility`, `patterns:solid:open_closed`,
+  `patterns:solid:liskov_substitution`, `patterns:solid:interface_segregation`,
+  `patterns:solid:dependency_inversion`
+- `patterns:grasp:information_expert`, `patterns:grasp:creator`, `patterns:grasp:controller`,
+  `patterns:grasp:low_coupling`, `patterns:grasp:high_cohesion`, `patterns:grasp:polymorphism`,
+  `patterns:grasp:pure_fabrication`, `patterns:grasp:indirection`,
+  `patterns:grasp:protected_variations`
+- `patterns:engineering:dry`, `patterns:engineering:kiss`, `patterns:engineering:yagni`,
+  `patterns:engineering:rule_of_three`, `patterns:engineering:separation_of_concerns`
+- `patterns:gof` — 23 паттерна; на 1С реально приземляются единицы: `patterns:gof:strategy`,
+  `patterns:gof:facade`, `patterns:gof:observer`, `patterns:gof:command`,
+  `patterns:gof:composite`, `patterns:gof:adapter`
 
 ---
 

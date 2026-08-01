@@ -49,7 +49,7 @@
 [v8std applied:   phase=implement, scope=document-posting, ids_checked=[std450,std603], conclusion=clean]
 [v8std skipped:   phase=implement, scope=query-virtual-table, planned_ids=[std657], reason=timeout, retries=3]
 [v8std discovered: phase=implement, scope=document-posting, query="проведение движения", top_ids=[std450,std792], new_ids=[std792], decision=applied]
-[v8std sentinel:  id=std450, status=found, phase=implement]
+[v8std sentinel:  id=std792, status=found, phase=implement]
 ```
 
 ## Что внутри
@@ -61,7 +61,7 @@
 | [`references/situations.md`](references/situations.md) | Карта по **действию в коде**: «пишешь `ОбработкаПроведения` → …», «составной тип в запросе → …» |
 | [`references/INSTALL.md`](references/INSTALL.md) | Пошаговая установка — рассчитана на выполнение агентом |
 | [`references/field-notes.md`](references/field-notes.md) | Почему слоёв именно четыре: инциденты, из которых каждый вырос |
-| [`tools/`](tools/) | Валидатор, смоук-тест (19 кейсов), пример конфига |
+| [`tools/`](tools/) | Валидатор, смоук-тест, пример конфига |
 
 ## Быстрый старт
 
@@ -70,10 +70,10 @@
 #    { "mcpServers": { "v8std": { "type": "http", "url": "https://ai.v8std.ru/mcp" } } }
 
 # 2. Проверить, что сервис отвечает
-#    v8std_get_page("std450")  →  found=true
+#    v8std_get_page("std792")  →  found=true
 
 # 3. Проверить валидатор
-node tools/v8std-evidence-validator.smoke.mjs      # 19 passed, 0 failed
+node tools/v8std-evidence-validator.smoke.mjs      # ожидается 0 failed
 
 # 4. Прогнать гейт
 node tools/v8std-evidence-validator.mjs validate-pack . --gate

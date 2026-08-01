@@ -46,7 +46,7 @@ url = "https://ai.v8std.ru/mcp"
 
 **Проверка (обязательная, не пропускать):**
 ```
-v8std_get_page("std450")
+v8std_get_page("std792")
 ```
 Ожидается `found=true`. Если инструмент недоступен — дальше идти бессмысленно: три из
 четырёх слоёв опираются на него.
@@ -62,16 +62,21 @@ ACC / BSLLS / v8-code-style), `v8std_explain_snippet` (по фрагменту B
 
 ## Шаг 2. Разложите файлы
 
-| Файл | Куда |
+**Скилл копируется каталогом целиком, вместе с `references/`** — внутри относительные
+ссылки, и при копировании одного `SKILL.md` они сломаются.
+
+| Что | Куда |
 |---|---|
-| `SKILL.md` | Туда, где ваш харнесс ищет скиллы: `.claude/skills/v8std-standards-harness/`, `~/.codex/skills/`, `.agents/skills/`. Если скиллов нет — куда угодно, но тогда обеспечьте чтение вручную (см. Шаг 3) |
-| `references/*.md` | Рядом со `SKILL.md`, в подкаталоге `references/` — ссылки внутри относительные |
-| `tools/v8std-evidence-validator.mjs` | В каталог скриптов проекта, например `tools/` |
+| `SKILL.md` + `references/` **одним каталогом** | Claude Code: `.claude/skills/v8std-standards-harness/`<br>Codex CLI: `~/.codex/skills/v8std-standards-harness/`<br>AGENTS-совместимые: `.agents/skills/v8std-standards-harness/`<br>Итог: `<каталог скиллов>/v8std-standards-harness/SKILL.md` и `.../v8std-standards-harness/references/*.md` |
+| `tools/v8std-evidence-validator.mjs` | В каталог скриптов проекта, например `tools/` — **отдельно** от каталога скилла: его запускает CI, а не агент |
 | `tools/v8std-evidence-validator.smoke.mjs` | Туда же |
 | `tools/v8std.config.example.json` | Скопировать как `v8std.config.json` в корень проекта и отредактировать (Шаг 4) |
 
-Проверка: `node tools/v8std-evidence-validator.smoke.mjs` — должно быть `19 passed, 0 failed`.
-Требуется Node.js 18+, внешних зависимостей нет.
+Если каталога скиллов у вашего харнесса нет — положите каталог пакета куда угодно, но тогда
+обеспечьте чтение карты вручную (Шаг 3).
+
+Проверка: `node tools/v8std-evidence-validator.smoke.mjs` — все кейсы должны пройти
+(`0 failed`). Требуется Node.js 18+, внешних зависимостей нет.
 
 ---
 
@@ -109,7 +114,7 @@ ACC / BSLLS / v8-code-style), `v8std_explain_snippet` (по фрагменту B
   "phases": ["design", "implement", "review"],
   "evidenceGlobs": ["**/v8std-evidence.md"],
   "promoteReport": "final-report.md",
-  "sentinelId": "std450"
+  "sentinelId": "std792"
 }
 ```
 
@@ -121,13 +126,26 @@ ACC / BSLLS / v8-code-style), `v8std_explain_snippet` (по фрагменту B
 | `promoteReport` | Файл с секцией «discoveries to promote» | `final-report.md` |
 | `sentinelId` | Эталонный ID для проверки живости индекса | `id` в записях не сверяется |
 
-**`sentinelId` подберите сейчас, а не потом.** Найдите самый свежий стандарт, который
-сегодня отдаёт сервис, и впишите его:
+**`sentinelId` подберите сейчас, а не потом.** В поставке зафиксирован `std792` —
+проверенный на момент выпуска пакета. При установке имеет смысл поднять его до более
+свежего, если такой появился.
+
+> ⚠️ **`v8std_search` не сортирует по новизне.** Полнотекстовый поиск по запросу вроде
+> «последние добавленные стандарты» возвращает релевантные, а не свежие страницы — легко
+> получить std467 или std488 и принять их за актуальные. Детерминированного «дай максимальный
+> ID» у сервиса нет.
+
+Рабочий способ — прощупать номера выше текущего sentinel:
 ```
-v8std_search("последние добавленные стандарты")   → выберите наибольший stdNNN
-v8std_get_page("std<NNN>")                         → убедитесь, что found=true
+v8std_get_page("std793")   → found=false, значит текущий максимум ниже
+v8std_get_page("std800")   → found=false
+...
 ```
-Незафиксированный sentinel не детектирует ничего.
+Берите наибольший ID, для которого `found=true`, и впишите его в `sentinelId`. Достаточно
+проверить 10–15 номеров вверх: стандарты нумеруются последовательно, разрыв в два десятка
+означает, что новых нет.
+
+Незафиксированный sentinel не детектирует ничего — поле обязательно к заполнению.
 
 ---
 
@@ -163,7 +181,7 @@ fi
 
 ## v8std evidence
 
-[v8std sentinel: id=std450, status=found, phase=implement]
+[v8std sentinel: id=std792, status=found, phase=implement]
 [v8std applied: phase=implement, scope=document-posting, ids_checked=[std450,std603], conclusion=clean]
 [v8std discovered: phase=implement, scope=document-posting, query="проведение документа движения", top_ids=[std450,std633], new_ids=[], decision=noted]
 ```

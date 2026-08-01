@@ -208,6 +208,15 @@ function validateIdList(idList, file, lineNo, fieldName) {
   }
 }
 
+// Поля-списки, которые обязаны быть непустыми: «проверил ничего» и «искал ничего» —
+// это не проверка. `new_ids` намеренно не здесь: пустой результат discovery законен.
+const NON_EMPTY_LISTS = {
+  applied: ['ids_checked'],
+  skipped: ['planned_ids'],
+  discovered: ['top_ids'],
+  sentinel: [],
+};
+
 function validateRecord(record, file, lineNo, config) {
   const { type, fields } = record;
   if (!RECORD_TYPES.has(type)) {
@@ -217,6 +226,16 @@ function validateRecord(record, file, lineNo, config) {
   for (const required of REQUIRED_KEYS[type]) {
     if (!(required in fields)) {
       emit('BLOCK', file, lineNo, `Missing required field "${required}" for type "${type}"`);
+      continue;
+    }
+    // Присутствие ключа с пустым значением — не выполненная проверка, а её имитация.
+    // Без этого `[v8std sentinel: id=, status=, phase=x]` проходил бы гейт зелёным.
+    const value = fields[required];
+    const isEmpty = Array.isArray(value) ? value.length === 0 : String(value).trim().length === 0;
+    if (isEmpty && !Array.isArray(value)) {
+      emit('BLOCK', file, lineNo, `Empty value for required field "${required}" in type "${type}"`);
+    } else if (isEmpty && NON_EMPTY_LISTS[type].includes(required)) {
+      emit('BLOCK', file, lineNo, `Empty list "${required}" in type "${type}" — an empty check is not a check`);
     }
   }
   if (fields.phase !== undefined) {
@@ -253,11 +272,16 @@ function validateRecord(record, file, lineNo, config) {
     validateIdList(fields.ids_checked, file, lineNo, 'ids_checked');
   }
   if (type === 'sentinel') {
-    if (fields.status && !ALLOWED_STATUS.has(fields.status)) {
+    if (fields.status !== undefined && !ALLOWED_STATUS.has(fields.status)) {
       emit('BLOCK', file, lineNo, `Unknown status "${fields.status}" (allowed: ${[...ALLOWED_STATUS].join(', ')})`);
     }
-    if (config.sentinelId && fields.id && fields.id !== config.sentinelId) {
-      emit('BLOCK', file, lineNo, `Sentinel id "${fields.id}" does not match configured sentinelId "${config.sentinelId}" — a drifting sentinel detects nothing`);
+    if (fields.id !== undefined && !STD_ID_RE.test(String(fields.id))) {
+      emit('BLOCK', file, lineNo, `Sentinel id "${fields.id}" is not a valid identifier`);
+    }
+    // Сверяем ВСЕГДА, когда sentinelId настроен, — включая пустой или отсутствующий id.
+    // Иначе пустое значение молча обходило бы весь третий слой.
+    if (config.sentinelId && String(fields.id ?? '') !== config.sentinelId) {
+      emit('BLOCK', file, lineNo, `Sentinel id "${fields.id ?? ''}" does not match configured sentinelId "${config.sentinelId}" — a drifting sentinel detects nothing`);
     }
   }
 }

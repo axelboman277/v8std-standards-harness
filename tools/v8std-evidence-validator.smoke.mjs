@@ -93,6 +93,37 @@ console.log('\n1. Формат записей');
   check('неизвестный тип записи блокирует', code === 2 && /Unknown record type/.test(out), `exit=${code}`);
 }
 
+// --- 1b. Пустые значения обязательных полей ----------------------------------
+
+console.log('\n1b. Пустые значения (имитация проверки)');
+
+{
+  const files = { 'log.md': evidence(['[v8std sentinel: id=, status=, phase=x]']) };
+  const { code, out } = run(files, { config: { profile: 'gate', sentinelId: 'std450' } });
+  check('sentinel с пустыми id/status = BLOCK', code === 2 && /Empty value/.test(out), `exit=${code} ${out}`);
+}
+{
+  const { code, out } = run({ 'log.md': evidence(['[v8std applied: phase=x, scope=y, ids_checked=[], conclusion=clean]']) });
+  check('applied с пустым ids_checked = BLOCK («проверил ничего»)', code === 2 && /Empty list/.test(out), `exit=${code} ${out}`);
+}
+{
+  const { code, out } = run({ 'log.md': evidence(['[v8std discovered: phase=x, scope=y, query=, top_ids=[], new_ids=[], decision=noted]']) });
+  check('discovered с пустым query и top_ids = BLOCK', code === 2 && /Empty (value|list)/.test(out), `exit=${code} ${out}`);
+}
+{
+  const { code, out } = run({ 'log.md': evidence(['[v8std skipped: phase=x, scope=y, planned_ids=[], reason=timeout, retries=3]']) });
+  check('skipped с пустым planned_ids = BLOCK', code === 2 && /Empty list/.test(out), `exit=${code} ${out}`);
+}
+{
+  const line = '[v8std discovered: phase=x, scope=y, query="проведение документа", top_ids=[std450], new_ids=[], decision=not_relevant]';
+  const { code, out } = run({ 'log.md': evidence([line]) });
+  check('discovered с пустым new_ids проходит (законный исход)', code === 0, `exit=${code} ${out}`);
+}
+{
+  const { code, out } = run({ 'log.md': evidence(['[v8std sentinel: id=не-id, status=found, phase=x]']) });
+  check('sentinel с невалидным id = BLOCK', code === 2 && /not a valid identifier/.test(out), `exit=${code} ${out}`);
+}
+
 // --- 2. Fail-open регрессии --------------------------------------------------
 
 console.log('\n2. Fail-open регрессии (главная группа)');
