@@ -84,19 +84,62 @@ function emit(severity, file, line, message) {
 
 // --- конфиг -----------------------------------------------------------------
 
+// Чтение файла — единственная точка; ошибка ввода-вывода становится BLOCK, а не падением
+// процесса с exit 1 (который CI прочитал бы как «только предупреждения»).
+function readTextFile(filePath) {
+  try {
+    return fs.readFileSync(filePath, 'utf8');
+  } catch (error) {
+    emit('BLOCK', filePath, 0, `Cannot read file: ${error.message}`);
+    return '';
+  }
+}
+
+// Схема конфига. Неверный тип поля — BLOCK, а не молчаливое отключение контроля:
+// `phases: "design"` (строка вместо массива) выключал фазовую проверку целиком.
+function validateConfigSchema(config, source) {
+  const where = source || '(config)';
+  if (config.profile !== undefined && !['gate', 'lint'].includes(config.profile)) {
+    emit('BLOCK', where, 0, `Unknown profile "${config.profile}" — allowed: gate, lint`);
+  }
+  for (const key of ['phases', 'evidenceGlobs']) {
+    const value = config[key];
+    if (value === undefined || value === null) continue;
+    if (!Array.isArray(value) || value.some(v => typeof v !== 'string')) {
+      emit('BLOCK', where, 0, `Config field "${key}" must be an array of strings`);
+      config[key] = null;
+    }
+  }
+  for (const key of ['promoteReport', 'sentinelId']) {
+    const value = config[key];
+    if (value === undefined || value === null) continue;
+    if (typeof value !== 'string') {
+      emit('BLOCK', where, 0, `Config field "${key}" must be a string`);
+      config[key] = null;
+    }
+  }
+}
+
 function loadConfig(taskDir, explicitPath) {
   const candidates = explicitPath
     ? [explicitPath]
     : [path.join(taskDir, 'v8std.config.json'), path.join(process.cwd(), 'v8std.config.json')];
   for (const candidate of candidates) {
     if (!fs.existsSync(candidate)) continue;
+    let parsed;
     try {
-      const parsed = JSON.parse(fs.readFileSync(candidate, 'utf8'));
-      return { ...DEFAULT_CONFIG, ...parsed, _source: candidate };
+      parsed = JSON.parse(readTextFile(candidate));
     } catch (error) {
       emit('BLOCK', candidate, 0, `Cannot parse config: ${error.message}`);
-      return { ...DEFAULT_CONFIG };
+      return { ...DEFAULT_CONFIG, _broken: true };
     }
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      emit('BLOCK', candidate, 0, 'Config must be a JSON object');
+      return { ...DEFAULT_CONFIG, _broken: true };
+    }
+    const merged = { ...DEFAULT_CONFIG, ...parsed, _source: candidate };
+    validateConfigSchema(merged, candidate);
+    return merged;
   }
   if (explicitPath) emit('BLOCK', explicitPath, 0, `Config not found: ${explicitPath}`);
   return { ...DEFAULT_CONFIG };
@@ -158,7 +201,12 @@ function resolveEvidenceFiles(taskDir, config) {
 }
 
 function resolvePromoteReport(taskDir, config) {
-  return path.join(taskDir, config.promoteReport || DEFAULT_CONFIG.promoteReport);
+  const target = path.resolve(taskDir, config.promoteReport || DEFAULT_CONFIG.promoteReport);
+  const root = path.resolve(taskDir);
+  // Отчёт обязан лежать внутри проверяемого каталога: `promoteReport: "../old-report.md"`
+  // позволял удовлетворить гейт чужим, давно написанным файлом.
+  const inside = target === root || target.startsWith(root + path.sep);
+  return { path: target, inside };
 }
 
 // --- парсер evidence-строки -------------------------------------------------
@@ -190,6 +238,7 @@ function parseEvidenceLine(line) {
     else current += ch;
   }
   if (current) tokens.push(current);
+  const duplicates = [];
   for (const token of tokens) {
     const eq = token.indexOf('=');
     if (eq < 0) continue;
@@ -202,9 +251,12 @@ function parseEvidenceLine(line) {
       const quoted = value.match(/^["'](.*)["']$/);
       if (quoted) value = quoted[1];
     }
+    // Повтор ключа — не опечатка, а способ переопределить проверку: при
+    // `status=not_found, status=found` побеждало последнее значение и запись проходила.
+    if (key in fields) duplicates.push(key);
     fields[key] = value;
   }
-  return { type, fields, raw: line };
+  return { type, fields, raw: line, duplicates };
 }
 
 function validateIdList(idList, file, lineNo, fieldName) {
@@ -250,6 +302,9 @@ function validateRecord(record, file, lineNo, config) {
   if (!RECORD_TYPES.has(type)) {
     emit('BLOCK', file, lineNo, `Unknown record type "${type}"`);
     return;
+  }
+  for (const key of new Set(record.duplicates || [])) {
+    emit('BLOCK', file, lineNo, `Duplicate field "${key}" — a repeated key silently overrides the earlier value`);
   }
   for (const required of REQUIRED_KEYS[type]) {
     if (!(required in fields)) {
@@ -337,10 +392,11 @@ function collectRecords(taskDir, config) {
     // BOM обязателен к удалению: в Windows-редакторах он появляется сам собой, а с ним
     // первая строка файла перестаёт совпадать с заголовком секции — и весь файл молча
     // считается пустым.
-    const lines = fs.readFileSync(file, 'utf8').replace(/^﻿/, '').split(/\r?\n/);
+    const lines = readTextFile(file).replace(/^﻿/, '').split(/\r?\n/);
     let inSection = false;
     let inFence = false;
-    let fenceMarker = '';
+    let fenceChar = '';
+    let fenceLen = 0;
     let inComment = false;
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
@@ -350,30 +406,40 @@ function collectRecords(taskDir, config) {
       //     (иначе пакет, положенный в проверяемое дерево, вечно удовлетворял бы гейт);
       //   • заголовок снаружи — секция настоящая, и записи в ней считаются даже если
       //     оформлены код-блоком (агенты часто так делают ради читаемости).
-      const fence = line.match(/^\s*(```+|~~~+)/);
+      // Длина ограждения значима: по CommonMark закрыть блок может только ограждение
+      // не короче открывающего. Без учёта длины ```` закрывалось ``` — и остаток
+      // документации ошибочно становился «данными».
+      const fence = line.match(/^\s*(`{3,}|~{3,})/);
       if (fence) {
-        if (!inFence) { inFence = true; fenceMarker = fence[1][0]; }
-        else if (fence[1][0] === fenceMarker) { inFence = false; fenceMarker = ''; }
+        const marker = fence[1];
+        if (!inFence) {
+          inFence = true; fenceChar = marker[0]; fenceLen = marker.length;
+        } else if (marker[0] === fenceChar && marker.length >= fenceLen) {
+          inFence = false; fenceChar = ''; fenceLen = 0;
+        }
         continue;
       }
-      // Закомментированная запись — это выключенная запись. Засчитывать её значило бы
-      // дать удобный способ сохранить вид работы, отменив саму работу.
-      if (!inFence) {
-        const opens = (line.match(/<!--/g) || []).length;
-        const closes = (line.match(/-->/g) || []).length;
-        const singleLineComment = opens > 0 && closes > 0 && !inComment;
-        if (!inComment && opens > closes) { inComment = true; continue; }
-        if (inComment) {
-          if (closes > 0) inComment = false;
-          continue;
-        }
-        if (singleLineComment && /<!--[^]*\[v8std/.test(line)) continue;
+      // Закомментированная запись — это выключенная запись, где бы она ни лежала:
+      // внутри код-блока в том числе.
+      const opens = (line.match(/<!--/g) || []).length;
+      const closes = (line.match(/-->/g) || []).length;
+      if (inComment) {
+        if (closes > 0) inComment = false;
+        continue;
       }
+      if (opens > closes) { inComment = true; continue; }
+      if (opens > 0 && closes > 0 && /<!--[^]*\[v8std/.test(line)) continue;
+
       // Заголовок распознаётся ТОЛЬКО целиком: `## v8std evidence example` — это раздел
       // документации про формат, а не секция с данными.
       if (!inFence && SECTION_HEADING_RE.test(line)) { inSection = true; continue; }
-      if (!inFence && inSection && /^##\s+\S/.test(line)) { inSection = false; }
-      if (!inSection || !/\[v8std\s+\w+:/.test(line)) continue;
+      // Секцию закрывает любой заголовок уровня 1-2, а не только H2.
+      if (!inFence && inSection && /^#{1,2}\s+\S/.test(line)) { inSection = false; }
+      if (!inSection) continue;
+      // Любое упоминание маркера в активной секции — заявка на запись. Узкий шаблон
+      // `[v8std <слово>:` пропускал строки без двоеточия и с переносом, то есть
+      // нарушение оставалось невидимым.
+      if (!line.includes('[v8std')) continue;
       const record = parseEvidenceLine(line);
       if (!record) {
         emit('BLOCK', file, i + 1, `Malformed v8std evidence line: ${line.trim()}`);
@@ -400,28 +466,45 @@ function validatePromoteSection(taskDir, config, collected) {
   }
   if (promotable.size === 0) return;
 
-  const reportPath = resolvePromoteReport(taskDir, config);
+  const report = resolvePromoteReport(taskDir, config);
   const idList = [...promotable].join(',');
-  if (!fs.existsSync(reportPath)) {
-    emit('BLOCK', taskDir, 0, `promotable new_ids present (${idList}) but ${path.basename(reportPath)} is missing — § "v8std discoveries to promote" cannot be verified`);
+  if (!report.inside) {
+    emit('BLOCK', taskDir, 0, `promoteReport "${config.promoteReport}" resolves outside the checked directory — the promote gate must not be satisfied by an external file`);
     return;
   }
-  const lines = fs.readFileSync(reportPath, 'utf8').split(/\r?\n/);
+  if (!fs.existsSync(report.path)) {
+    emit('BLOCK', taskDir, 0, `promotable new_ids present (${idList}) but ${path.basename(report.path)} is missing — § "v8std discoveries to promote" cannot be verified`);
+    return;
+  }
+  const lines = readTextFile(report.path).split(/\r?\n/);
   let sectionStart = -1;
   for (let i = 0; i < lines.length; i++) {
-    if (/^##\s+v8std discoveries to promote\b/i.test(lines[i])) { sectionStart = i; break; }
+    // Заголовок целиком: `## v8std discoveries to promote example` — это документация.
+    if (/^##\s+v8std discoveries to promote\s*#*\s*$/i.test(lines[i])) { sectionStart = i; break; }
   }
   if (sectionStart < 0) {
-    emit('BLOCK', reportPath, 0, `promotable new_ids present (${idList}) but § "v8std discoveries to promote" is missing`);
+    emit('BLOCK', report.path, 0, `promotable new_ids present (${idList}) but § "v8std discoveries to promote" is missing`);
     return;
   }
   let sectionEnd = lines.length;
   for (let i = sectionStart + 1; i < lines.length; i++) {
-    if (/^##\s+\S/.test(lines[i])) { sectionEnd = i; break; }
+    if (/^#{1,2}\s+\S/.test(lines[i])) { sectionEnd = i; break; }
   }
-  const body = lines.slice(sectionStart + 1, sectionEnd).join('\n').replace(/<!--[\s\S]*?-->/g, '').trim();
+  const body = lines.slice(sectionStart + 1, sectionEnd).join('\n')
+    .replace(/<!--[\s\S]*?-->/g, '')
+    .replace(/^\s*(`{3,}|~{3,})[\s\S]*?^\s*\1\s*$/gm, '')
+    .trim();
   if (body.length === 0) {
-    emit('BLOCK', reportPath, sectionStart + 1, `promotable new_ids present (${idList}) but § "v8std discoveries to promote" is empty (only HTML comments / whitespace)`);
+    emit('BLOCK', report.path, sectionStart + 1, `promotable new_ids present (${idList}) but § "v8std discoveries to promote" is empty (only HTML comments / whitespace)`);
+    return;
+  }
+  // Наличие любого текста — не решение по находке. Каждый продвигаемый ID должен быть
+  // назван: иначе секция с одним словом «TODO» закрывала гейт.
+  for (const id of promotable) {
+    const token = new RegExp(`(^|[^\\w:.-])${id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^\\w:.-]|$)`);
+    if (!token.test(body)) {
+      emit('BLOCK', report.path, sectionStart + 1, `promotable id "${id}" is not mentioned in § "v8std discoveries to promote" — the decision on it was never recorded`);
+    }
   }
 }
 
@@ -511,9 +594,11 @@ function main() {
   const taskDir = args[0];
   const config = loadConfig(taskDir, configPath);
   if (profileOverride) config.profile = profileOverride;
+  // Неизвестный профиль НЕ понижается до lint: молчаливое ослабление контроля — это
+  // ровно тот отказ, против которого построен инструмент. Схема конфига уже дала BLOCK;
+  // здесь только приводим значение к безопасному для дальнейшего прохода.
   if (config.profile !== 'gate' && config.profile !== 'lint') {
-    emit('WARN', config._source || '(defaults)', 0, `Unknown profile "${config.profile}", falling back to lint`);
-    config.profile = 'lint';
+    config.profile = 'gate';
   }
 
   validatePack(taskDir, config);

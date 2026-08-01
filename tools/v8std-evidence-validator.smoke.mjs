@@ -208,6 +208,89 @@ ${DISCOVERED_NOT_RELEVANT}
   check('комментарий пропущен, живые записи рядом читаются', code === 0, `exit=${code} ${out}`);
 }
 
+// --- 1f. Обходы через структуру записи и разметку -----------------------------
+
+console.log('\n1f. Дубли ключей, границы блоков, malformed');
+
+{
+  const line = '[v8std sentinel: id=std450, status=not_found, status=found, phase=x]';
+  const { code, out } = run({ 'log.md': evidence([line]) }, { config: { profile: 'gate', sentinelId: 'std450' } });
+  check('дубль status (not_found → found) = BLOCK', code === 2 && /Duplicate field/.test(out), `exit=${code} ${out}`);
+}
+{
+  const line = '[v8std discovered: phase=x, scope=y, query="q", top_ids=[std450], new_ids=[std733], new_ids=[], decision=applied]';
+  const { code, out } = run({ 'log.md': evidence([line, SENTINEL]) });
+  check('дубль new_ids (обход promote) = BLOCK', code === 2 && /Duplicate field/.test(out), `exit=${code} ${out}`);
+}
+{
+  // Четырёхсимвольное ограждение нельзя закрыть тройным: иначе остаток документации
+  // ошибочно становится «данными».
+  const doc = `# Док\n\n\`\`\`\`markdown\n## v8std evidence\n\n\`\`\`\n${SENTINEL}\n${APPLIED}\n${DISCOVERED_NOT_RELEVANT}\n\`\`\`\`\n`;
+  const { code, out } = run({ 'INSTALL.md': doc }, { config: { profile: 'gate', sentinelId: 'std450' } });
+  check('```` не закрывается ``` — пример остаётся примером', code === 2 && /No v8std evidence records/.test(out), `exit=${code} ${out}`);
+}
+{
+  const doc = `# Журнал\n\n## v8std evidence\n\n\`\`\`\n<!--\n${SENTINEL}\n${APPLIED}\n-->\n\`\`\`\n`;
+  const { code, out } = run({ 'log.md': doc }, { config: { profile: 'gate', sentinelId: 'std450' } });
+  check('закомментированные записи внутри код-блока не считаются', code === 2 && /No v8std evidence records/.test(out), `exit=${code} ${out}`);
+}
+{
+  const doc = `## v8std evidence\n\n${SENTINEL}\n\n# Другой раздел\n\n${APPLIED}\n${DISCOVERED_NOT_RELEVANT}\n`;
+  const { code, out } = run({ 'log.md': doc }, { config: { profile: 'gate', sentinelId: 'std450' } });
+  check('H1 завершает секцию — записи из чужого раздела не засчитываются', code === 2, `exit=${code} ${out}`);
+}
+{
+  const { code, out } = run({ 'log.md': evidence(['[v8std applied phase=x, scope=y, ids_checked=[std450], conclusion=clean]']) });
+  check('запись без двоеточия = BLOCK, а не игнор', code === 2 && /Malformed/.test(out), `exit=${code} ${out}`);
+}
+{
+  const doc = `## v8std evidence\n\n[v8std applied:\n phase=x, scope=y, ids_checked=[std450], conclusion=clean]\n`;
+  const { code, out } = run({ 'log.md': doc });
+  check('многострочная запись = BLOCK', code === 2 && /Malformed/.test(out), `exit=${code} ${out}`);
+}
+
+// --- 1g. Промоут-гейт и конфиг ------------------------------------------------
+
+console.log('\n1g. Промоут-гейт и схема конфига');
+
+{
+  const files = {
+    'log.md': evidence([SENTINEL, APPLIED, DISCOVERED_APPLIED]),
+    'final-report.md': '# Отчёт\n\n## v8std discoveries to promote\n\nTODO\n',
+  };
+  const { code, out } = run(files);
+  check('promote-секция из одного «TODO» = BLOCK (ID не назван)', code === 2 && /is not mentioned/.test(out), `exit=${code} ${out}`);
+}
+{
+  const files = {
+    'log.md': evidence([SENTINEL, APPLIED, DISCOVERED_APPLIED]),
+    'final-report.md': '# Отчёт\n\n## v8std discoveries to promote example\n\nstd733 — пример.\n',
+  };
+  const { code, out } = run(files);
+  check('заголовок promote с суффиксом example не считается секцией', code === 2 && /is missing/.test(out), `exit=${code} ${out}`);
+}
+{
+  const files = { 'log.md': evidence([SENTINEL, APPLIED, DISCOVERED_APPLIED]) };
+  const config = { promoteReport: '../outside-report.md' };
+  const { code, out } = run(files, { config });
+  check('promoteReport за пределами каталога = BLOCK', code === 2 && /outside the checked directory/.test(out), `exit=${code} ${out}`);
+}
+{
+  const files = { 'log.md': evidence([SENTINEL, APPLIED, DISCOVERED_NOT_RELEVANT]) };
+  const { code, out } = run(files, { config: { profile: 'gate', phases: 'design', sentinelId: 'std450' } });
+  check('phases строкой вместо массива = BLOCK, а не молчаливое отключение', code === 2 && /must be an array/.test(out), `exit=${code} ${out}`);
+}
+{
+  const files = { 'log.md': evidence([SENTINEL, APPLIED, DISCOVERED_NOT_RELEVANT]) };
+  const { code, out } = run(files, { config: { evidenceGlobs: '**/*.md' } });
+  check('evidenceGlobs строкой = BLOCK, а не падение процесса', code === 2 && /must be an array/.test(out), `exit=${code} ${out}`);
+}
+{
+  const files = { 'log.md': evidence([SENTINEL, APPLIED, DISCOVERED_NOT_RELEVANT]) };
+  const { code, out } = run(files, { config: { profile: 'mystery', sentinelId: 'std450' } });
+  check('неизвестный profile = BLOCK, а не понижение до lint', code === 2 && /Unknown profile/.test(out), `exit=${code} ${out}`);
+}
+
 // --- 2. Fail-open регрессии --------------------------------------------------
 
 console.log('\n2. Fail-open регрессии (главная группа)');
