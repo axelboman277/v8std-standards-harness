@@ -133,6 +133,52 @@ console.log('\n1b. Пустые значения (имитация провер�
   check('evidenceGlobs на .txt: записи находятся, а не игнорируются', code === 0, `exit=${code} ${out}`);
 }
 
+// --- 1c. Типы полей и подделка формы значения --------------------------------
+
+console.log('\n1c. Типы полей (список vs скаляр)');
+
+{
+  const { code, out } = run({ 'log.md': evidence(['[v8std applied: phase=x, scope=y, ids_checked="[]", conclusion=clean]']) });
+  check('ids_checked="[]" (строка, похожая на список) = BLOCK', code === 2 && /must be a list/.test(out), `exit=${code} ${out}`);
+}
+{
+  const { code, out } = run({ 'log.md': evidence(['[v8std applied: phase=x, scope=y, ids_checked=NOT_AN_ID, conclusion=clean]']) });
+  check('ids_checked как скаляр = BLOCK', code === 2 && /must be a list/.test(out), `exit=${code} ${out}`);
+}
+{
+  const { code, out } = run({ 'log.md': evidence(['[v8std discovered: phase=x, scope=y, query=[], top_ids=[std450], new_ids=[], decision=noted]']) });
+  check('query как список = BLOCK', code === 2 && /must be a scalar/.test(out), `exit=${code} ${out}`);
+}
+{
+  // U+200B ZERO WIDTH SPACE — та же пустота, только незаметная
+  const { code, out } = run({ 'log.md': evidence(['[v8std discovered: phase=x, scope=y, query="\u200B\u200B", top_ids=[std450], new_ids=[], decision=noted]']) });
+  check('query из невидимых символов = BLOCK', code === 2 && /Empty value/.test(out), `exit=${code} ${out}`);
+}
+
+// --- 1d. Правила профиля gate -------------------------------------------------
+
+console.log('\n1d. Правила gate');
+
+{
+  const files = { 'log.md': evidence(['[v8std sentinel: id=std450, status=not_found, phase=x]', APPLIED, DISCOVERED_NOT_RELEVANT]) };
+  const { code, out } = run(files, { config: { profile: 'gate', sentinelId: 'std450' } });
+  check('gate: sentinel status=not_found = BLOCK (индекс протух)', code === 2 && /stale or unavailable/.test(out), `exit=${code} ${out}`);
+}
+{
+  const files = { 'log.md': evidence([SENTINEL, APPLIED, DISCOVERED_NOT_RELEVANT]) };
+  const { code, out } = run(files, { profile: 'gate' });
+  check('gate без sentinelId в конфиге = BLOCK', code === 2 && /requires a valid "sentinelId"/.test(out), `exit=${code} ${out}`);
+}
+{
+  const files = { 'log.md': evidence([SENTINEL, '[v8std sentinel: id=std999, status=found, phase=x]', APPLIED, DISCOVERED_NOT_RELEVANT]) };
+  const { code, out } = run(files, { config: { profile: 'gate', sentinelId: 'std450' } });
+  check('gate: второй sentinel с чужим id = BLOCK', code === 2 && /does not match configured/.test(out), `exit=${code} ${out}`);
+}
+{
+  const { code, out } = run({ 'log.md': `# Док\n\n## v8std evidence example\n\n${APPLIED}\n${SENTINEL}\n` }, { profile: 'gate' });
+  check('заголовок "## v8std evidence example" не считается секцией', code === 2 && /No v8std evidence records/.test(out), `exit=${code} ${out}`);
+}
+
 // --- 2. Fail-open регрессии --------------------------------------------------
 
 console.log('\n2. Fail-open регрессии (главная группа)');
@@ -221,7 +267,7 @@ console.log('\n2. Fail-open регрессии (главная группа)');
 {
   // Обратная сторона: настоящие записи вне ограждений по-прежнему видны.
   const mixed = `# Журнал\n\n\`\`\`bsl\nПроцедура Пример()\nКонецПроцедуры\n\`\`\`\n\n## v8std evidence\n\n${SENTINEL}\n${APPLIED}\n${DISCOVERED_NOT_RELEVANT}\n`;
-  const { code, out } = run({ 'log.md': mixed }, { profile: 'gate' });
+  const { code, out } = run({ 'log.md': mixed }, { config: { profile: 'gate', sentinelId: 'std450' } });
   check('gate: записи вне ограждений видны, соседний код-блок не мешает', code === 0, `exit=${code} ${out}`);
 }
 {
@@ -229,7 +275,7 @@ console.log('\n2. Fail-open регрессии (главная группа)');
   // Такие записи обязаны считаться — иначе привычка «обернуть для читаемости» делает
   // работу невидимой для гейта.
   const boxed = `# Журнал\n\n## v8std evidence\n\n\`\`\`\n${SENTINEL}\n${APPLIED}\n${DISCOVERED_NOT_RELEVANT}\n\`\`\`\n\nДетали ниже.\n`;
-  const { code, out } = run({ 'log.md': boxed }, { profile: 'gate' });
+  const { code, out } = run({ 'log.md': boxed }, { config: { profile: 'gate', sentinelId: 'std450' } });
   check('gate: заголовок снаружи + записи в код-блоке = записи считаются', code === 0, `exit=${code} ${out}`);
 }
 

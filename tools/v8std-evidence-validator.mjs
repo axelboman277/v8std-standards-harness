@@ -43,6 +43,9 @@ const REQUIRED_KEYS = {
 
 const SCOPE_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/; // kebab-case
 
+// Только точный заголовок секции; допускаются лишь закрывающие решётки и пробелы.
+const SECTION_HEADING_RE = /^##\s+v8std evidence\s*#*\s*$/i;
+
 const ALLOWED_REASON = new Set([
   'mcp_unavailable_after_3_retries',
   'timeout',
@@ -205,6 +208,8 @@ function parseEvidenceLine(line) {
 }
 
 function validateIdList(idList, file, lineNo, fieldName) {
+  // Скаляр вместо списка уже отклонён проверкой типов; молча выходить здесь нельзя —
+  // иначе `ids_checked=NOT_AN_ID` осталось бы вовсе непроверенным.
   if (!Array.isArray(idList)) return;
   for (const id of idList) {
     if (!STD_ID_RE.test(id)) {
@@ -213,14 +218,32 @@ function validateIdList(idList, file, lineNo, fieldName) {
   }
 }
 
-// Поля-списки, которые обязаны быть непустыми: «проверил ничего» и «искал ничего» —
-// это не проверка. `new_ids` намеренно не здесь: пустой результат discovery законен.
+// Ожидаемый ТИП каждого поля. Без явной схемы `ids_checked="[]"` (строка, похожая на
+// список) и `ids_checked=NOT_AN_ID` (скаляр вместо списка) проскакивали мимо обеих
+// проверок: одна ждала массив, другая — строку, и каждая считала это заботой другой.
+const FIELD_TYPES = {
+  applied: { phase: 'scalar', scope: 'scalar', ids_checked: 'list', conclusion: 'scalar' },
+  skipped: { phase: 'scalar', scope: 'scalar', planned_ids: 'list', reason: 'scalar', retries: 'scalar' },
+  discovered: { phase: 'scalar', scope: 'scalar', query: 'scalar', top_ids: 'list', new_ids: 'list', decision: 'scalar' },
+  sentinel: { id: 'scalar', status: 'scalar', phase: 'scalar' },
+};
+
+// Списки, которые обязаны быть непустыми: «проверил ничего» и «искал ничего» — не проверка.
+// `new_ids` намеренно не здесь: пустой результат discovery законен.
 const NON_EMPTY_LISTS = {
   applied: ['ids_checked'],
   skipped: ['planned_ids'],
   discovered: ['top_ids'],
   sentinel: [],
 };
+
+// Невидимые символы (zero-width, BOM, неразрывные пробелы) — та же пустота, только
+// незаметная глазу и проходящая обычный trim().
+const INVISIBLE_RE = /[\u00A0\u180E\u200B-\u200F\u202F\u205F\u2060\u3000\uFEFF]/g;
+
+function isBlank(value) {
+  return String(value).replace(INVISIBLE_RE, '').trim().length === 0;
+}
 
 function validateRecord(record, file, lineNo, config) {
   const { type, fields } = record;
@@ -233,14 +256,29 @@ function validateRecord(record, file, lineNo, config) {
       emit('BLOCK', file, lineNo, `Missing required field "${required}" for type "${type}"`);
       continue;
     }
-    // Присутствие ключа с пустым значением — не выполненная проверка, а её имитация.
-    // Без этого `[v8std sentinel: id=, status=, phase=x]` проходил бы гейт зелёным.
     const value = fields[required];
-    const isEmpty = Array.isArray(value) ? value.length === 0 : String(value).trim().length === 0;
-    if (isEmpty && !Array.isArray(value)) {
+    const expected = FIELD_TYPES[type][required];
+
+    // 1. Тип — до всего остального.
+    if (expected === 'list' && !Array.isArray(value)) {
+      emit('BLOCK', file, lineNo, `Field "${required}" must be a list like [stdA,stdB], got scalar "${value}"`);
+      continue;
+    }
+    if (expected === 'scalar' && Array.isArray(value)) {
+      emit('BLOCK', file, lineNo, `Field "${required}" must be a scalar value, got list`);
+      continue;
+    }
+
+    // 2. Пустота — включая невидимые символы.
+    if (expected === 'scalar' && isBlank(value)) {
       emit('BLOCK', file, lineNo, `Empty value for required field "${required}" in type "${type}"`);
-    } else if (isEmpty && NON_EMPTY_LISTS[type].includes(required)) {
-      emit('BLOCK', file, lineNo, `Empty list "${required}" in type "${type}" — an empty check is not a check`);
+      continue;
+    }
+    if (expected === 'list') {
+      const meaningful = value.filter(v => !isBlank(v));
+      if (meaningful.length === 0 && NON_EMPTY_LISTS[type].includes(required)) {
+        emit('BLOCK', file, lineNo, `Empty list "${required}" in type "${type}" — an empty check is not a check`);
+      }
     }
   }
   if (fields.phase !== undefined) {
@@ -314,7 +352,9 @@ function collectRecords(taskDir, config) {
         else if (fence[1][0] === fenceMarker) { inFence = false; fenceMarker = ''; }
         continue;
       }
-      if (!inFence && /^##\s+v8std evidence\b/i.test(line)) { inSection = true; continue; }
+      // Заголовок распознаётся ТОЛЬКО целиком: `## v8std evidence example` — это раздел
+      // документации про формат, а не секция с данными.
+      if (!inFence && SECTION_HEADING_RE.test(line)) { inSection = true; continue; }
       if (!inFence && inSection && /^##\s+\S/.test(line)) { inSection = false; }
       if (!inSection || !/\[v8std\s+\w+:/.test(line)) continue;
       const record = parseEvidenceLine(line);
@@ -376,8 +416,25 @@ function validateGateCompleteness(taskDir, config, collected) {
     return;
   }
   const types = new Set(collected.map(c => c.record.type));
-  if (!types.has('sentinel')) {
+
+  // sentinelId обязателен именно в gate: без него разные sentinel-записи не с чем сверять,
+  // и третий слой превращается в декорацию.
+  if (!config.sentinelId || isBlank(config.sentinelId) || !STD_ID_RE.test(String(config.sentinelId))) {
+    emit('BLOCK', taskDir, 0, `Gate profile requires a valid "sentinelId" in config (got ${JSON.stringify(config.sentinelId ?? null)}) — without it sentinel records cannot be verified.`);
+  }
+
+  const sentinels = collected.filter(c => c.record.type === 'sentinel');
+  if (sentinels.length === 0) {
     emit('BLOCK', taskDir, 0, 'No [v8std sentinel: ...] record — index staleness was never checked.');
+  } else if (config.sentinelId) {
+    // Совпадающий по id sentinel обязан подтвердить, что индекс жив. `not_found` означает,
+    // что источник истины протух: результаты этой сессии недостоверны.
+    const matching = sentinels.filter(c => String(c.record.fields.id ?? '') === config.sentinelId);
+    const confirmed = matching.filter(c => c.record.fields.status === 'found');
+    if (matching.length > 0 && confirmed.length === 0) {
+      const anchor = matching[0];
+      emit('BLOCK', anchor.file, anchor.line, `Sentinel "${config.sentinelId}" reported status=not_found — the standards index is stale or unavailable, so this run's checks are not trustworthy.`);
+    }
   }
   if (!types.has('discovered') && !types.has('skipped')) {
     emit('BLOCK', taskDir, 0, 'No [v8std discovered: ...] and no [v8std skipped: ...] record — proactive discovery was never performed nor explicitly waived.');
