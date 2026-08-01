@@ -259,13 +259,17 @@ function parseEvidenceLine(line) {
   return { type, fields, raw: line, duplicates };
 }
 
-function validateIdList(idList, file, lineNo, fieldName) {
+function validateIdList(idList, file, lineNo, fieldName, config) {
   // Скаляр вместо списка уже отклонён проверкой типов; молча выходить здесь нельзя —
   // иначе `ids_checked=NOT_AN_ID` осталось бы вовсе непроверенным.
   if (!Array.isArray(idList)) return;
+  // В gate нераспознанный идентификатор — блокирующая ошибка: запись со списком вида
+  // `["std450,std603"]` формально непуста, но не содержит ни одного проверяемого ID,
+  // то есть проверка не подтверждена. В lint это остаётся предупреждением.
+  const severity = config && config.profile === 'gate' ? 'BLOCK' : 'WARN';
   for (const id of idList) {
     if (!STD_ID_RE.test(id)) {
-      emit('WARN', file, lineNo, `Suspicious ID "${id}" in ${fieldName} (expected stdNNN / acc:NNN / bslls:Code / v8cs:code / patterns:alias)`);
+      emit(severity, file, lineNo, `Suspicious ID "${id}" in ${fieldName} (expected stdNNN / acc:NNN / bslls:Code / v8cs:code / patterns:alias)`);
     }
   }
 }
@@ -354,20 +358,20 @@ function validateRecord(record, file, lineNo, config) {
     if (fields.retries && fields.retries !== '3') {
       emit('WARN', file, lineNo, `retries="${fields.retries}" — anti-pattern, allowed retries=3`);
     }
-    validateIdList(fields.planned_ids, file, lineNo, 'planned_ids');
+    validateIdList(fields.planned_ids, file, lineNo, 'planned_ids', config);
   }
   if (type === 'discovered') {
     if (fields.decision && !ALLOWED_DECISION.has(fields.decision)) {
       emit('BLOCK', file, lineNo, `Unknown decision "${fields.decision}" (allowed: ${[...ALLOWED_DECISION].join(', ')})`);
     }
-    validateIdList(fields.top_ids, file, lineNo, 'top_ids');
-    validateIdList(fields.new_ids, file, lineNo, 'new_ids');
+    validateIdList(fields.top_ids, file, lineNo, 'top_ids', config);
+    validateIdList(fields.new_ids, file, lineNo, 'new_ids', config);
   }
   if (type === 'applied') {
     if (fields.conclusion && !CONCLUSION_RE.test(fields.conclusion)) {
       emit('BLOCK', file, lineNo, `Bad conclusion "${fields.conclusion}" (expected: clean | violation:<stdNNN|acc:NNN|bslls:Code|v8cs:code|patterns:alias>)`);
     }
-    validateIdList(fields.ids_checked, file, lineNo, 'ids_checked');
+    validateIdList(fields.ids_checked, file, lineNo, 'ids_checked', config);
   }
   if (type === 'sentinel') {
     if (fields.status !== undefined && !ALLOWED_STATUS.has(fields.status)) {
@@ -421,14 +425,31 @@ function collectRecords(taskDir, config) {
       }
       // Закомментированная запись — это выключенная запись, где бы она ни лежала:
       // внутри код-блока в том числе.
-      const opens = (line.match(/<!--/g) || []).length;
-      const closes = (line.match(/-->/g) || []).length;
+      // Комментарий закрывается ПЕРВЫМ `-->` (как в CommonMark), вложенности нет.
+      // Подсчёт «открытий больше закрытий» ошибочно считал `<!-- <!-- -->` незакрытым
+      // и проглатывал остаток файла — безопасно, но по неверной причине.
       if (inComment) {
-        if (closes > 0) inComment = false;
-        continue;
+        const close = line.indexOf('-->');
+        if (close < 0) continue;
+        // Хвост после закрытия — обычный текст этой же строки.
+        const tail = line.slice(close + 3);
+        inComment = false;
+        if (!tail.includes('[v8std')) continue;
+      } else {
+        const open = line.indexOf('<!--');
+        if (open >= 0) {
+          const close = line.indexOf('-->', open + 4);
+          if (close < 0) {
+            // Комментарий не закрыт в этой строке: учитываем только текст до него.
+            inComment = true;
+            if (!line.slice(0, open).includes('[v8std')) continue;
+          } else if (/<!--[^]*?\[v8std/.test(line.slice(open, close + 3))) {
+            // Запись целиком внутри однострочного комментария — выключена.
+            const outside = line.slice(0, open) + line.slice(close + 3);
+            if (!outside.includes('[v8std')) continue;
+          }
+        }
       }
-      if (opens > closes) { inComment = true; continue; }
-      if (opens > 0 && closes > 0 && /<!--[^]*\[v8std/.test(line)) continue;
 
       // Заголовок распознаётся ТОЛЬКО целиком: `## v8std evidence example` — это раздел
       // документации про формат, а не секция с данными.
@@ -498,7 +519,12 @@ function validatePromoteSection(taskDir, config, collected) {
   }
   const body = lines.slice(sectionStart + 1, sectionEnd).join('\n')
     .replace(/<!--[\s\S]*?-->/g, '')
+    // Незакрытый комментарий скрывает остаток секции — иначе достаточно было открыть
+    // `<!--` и «упомянуть» под ним нужный ID, не приняв решения на самом деле.
+    .replace(/<!--[\s\S]*$/, '')
     .replace(/^\s*(`{3,}|~{3,})[\s\S]*?^\s*\1\s*$/gm, '')
+    // Аналогично — незакрытое ограждение.
+    .replace(/^\s*(`{3,}|~{3,})[\s\S]*$/m, '')
     .trim();
   if (body.length === 0) {
     emit('BLOCK', report.path, sectionStart + 1, `promotable new_ids present (${idList}) but § "v8std discoveries to promote" is empty (only HTML comments / whitespace)`);

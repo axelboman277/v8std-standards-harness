@@ -302,6 +302,38 @@ console.log('\n1g. Промоут-гейт и схема конфига');
   const { code, out } = run(files, { config: { profile: 'mystery', sentinelId: 'std450' } });
   check('неизвестный profile = BLOCK, а не понижение до lint', code === 2 && /Unknown profile/.test(out), `exit=${code} ${out}`);
 }
+{
+  // Список из одного элемента в кавычках с запятой внутри: формально непуст,
+  // но ни одного проверяемого ID не содержит.
+  const line = '[v8std applied: phase=x, scope=y, ids_checked=["std450,std603"], conclusion=clean]';
+  const { code, out } = run({ 'log.md': evidence([line, SENTINEL, '[v8std skipped: phase=x, scope=y, planned_ids=[std1], reason=timeout, retries=3]']) }, { config: { profile: 'gate', sentinelId: 'std450' } });
+  check('gate: нераспознанный ID = BLOCK (в lint остаётся WARN)', code === 2 && /Suspicious ID/.test(out), `exit=${code} ${out}`);
+}
+{
+  const { code, out } = run({ 'log.md': evidence(['[v8std applied: phase=x, scope=y, ids_checked=[STD-450], conclusion=clean]']) }, { profile: 'lint' });
+  check('lint: нераспознанный ID остаётся WARN', code === 1 && /Suspicious ID/.test(out), `exit=${code} ${out}`);
+}
+{
+  const files = {
+    'log.md': evidence([SENTINEL, APPLIED, DISCOVERED_APPLIED]),
+    'final-report.md': '# Отчёт\n\n## v8std discoveries to promote\n\nрешение ниже\n<!--\nstd733 — берём\n',
+  };
+  const { code, out } = run(files, { config: { profile: 'gate', sentinelId: 'std450' } });
+  check('promote: ID только в незакрытом комментарии = BLOCK', code === 2 && /is not mentioned/.test(out), `exit=${code} ${out}`);
+}
+{
+  const files = {
+    'log.md': evidence([SENTINEL, APPLIED, DISCOVERED_APPLIED]),
+    'final-report.md': '# Отчёт\n\n## v8std discoveries to promote\n\nрешение\n\n```\nstd733\n```\n',
+  };
+  const { code, out } = run(files, { config: { profile: 'gate', sentinelId: 'std450' } });
+  check('promote: ID только внутри код-блока = BLOCK', code === 2 && /is not mentioned/.test(out), `exit=${code} ${out}`);
+}
+{
+  const doc = `## v8std evidence\n\n<!-- <!-- -->\n[v8std applied phase=x, ids_checked=[std450]]\n${SENTINEL}\n${APPLIED}\n${DISCOVERED_NOT_RELEVANT}\n`;
+  const { code, out } = run({ 'log.md': doc }, { config: { profile: 'gate', sentinelId: 'std450' } });
+  check('вложенный комментарий не скрывает повреждённую запись', code === 2 && /Malformed/.test(out), `exit=${code} ${out}`);
+}
 
 // --- 2. Fail-open регрессии --------------------------------------------------
 
