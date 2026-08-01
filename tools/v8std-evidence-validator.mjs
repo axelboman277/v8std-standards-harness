@@ -166,16 +166,29 @@ function globToRegExp(pattern) {
   return new RegExp(`^${escaped}$`);
 }
 
+// Каталоги, которые не содержат отметок и не должны сканироваться.
+const SKIP_DIRS = new Set(['node_modules', '.git', 'secrets']);
+
 function walkFiles(root) {
   const out = [];
   if (!fs.existsSync(root)) return out;
   const stack = [root];
   while (stack.length > 0) {
     const current = stack.pop();
-    for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+    let entries;
+    try {
+      entries = fs.readdirSync(current, { withFileTypes: true });
+    } catch (error) {
+      // Недоступный каталог — не повод падать с необработанным исключением: процесс
+      // завершился бы кодом 1, который вызывающая сборка прочитает как «предупреждения».
+      // Пропуск обязан быть заметным, поэтому WARN, а не тишина.
+      emit('WARN', current, 0, `Cannot read directory, skipped: ${error.code || error.message}`);
+      continue;
+    }
+    for (const entry of entries) {
       const full = path.join(current, entry.name);
       if (entry.isDirectory()) {
-        if (entry.name === 'node_modules' || entry.name === '.git') continue;
+        if (SKIP_DIRS.has(entry.name)) continue;
         stack.push(full);
       } else if (entry.isFile()) {
         out.push(full);
@@ -211,8 +224,35 @@ function resolvePromoteReport(taskDir, config) {
 
 // --- парсер evidence-строки -------------------------------------------------
 
+// Вырезает запись из строки с учётом вложенных списков: закрывающей считается скобка,
+// парная открывающей `[v8std`, а не первая встречная (иначе `ids_checked=[a,b]` рвёт запись).
+function extractRecordSpan(line) {
+  const start = line.search(/\[v8std\s+\w+:/);
+  if (start < 0) return null;
+  let depth = 0;
+  let inQuote = null;
+  for (let i = start; i < line.length; i++) {
+    const ch = line[i];
+    if (inQuote) { if (ch === inQuote) inQuote = null; continue; }
+    if (ch === '"' || ch === "'") { inQuote = ch; continue; }
+    if (ch === '[') depth++;
+    else if (ch === ']') {
+      depth--;
+      if (depth === 0) return line.slice(start, i + 1);
+    }
+  }
+  return null; // скобка не закрыта — запись повреждена
+}
+
 function parseEvidenceLine(line) {
-  const m = line.match(/\[v8std\s+(\w+):\s*(.+?)\]\s*$/);
+  // Запись ищем в любом месте строки, а не только в её конце: на практике её часто
+  // оформляют пунктом списка и дополняют пояснением — `- \`[v8std applied: …]\` — почему`.
+  // Содержимое записи от этого не меняется, поэтому отвергать такую строку значит
+  // объявлять нарушением читаемое оформление. Защита от невидимого malformed сохраняется:
+  // если корректную запись извлечь не удалось, строка с маркером всё равно даёт BLOCK.
+  const span = extractRecordSpan(line);
+  if (!span) return null;
+  const m = span.match(/^\[v8std\s+(\w+):\s*([\s\S]*)\]$/);
   if (!m) return null;
   const type = m[1];
   const body = m[2];

@@ -41,7 +41,9 @@ function run(files, { profile, config } = {}) {
     if (config) writeFileSync(join(dir, 'v8std.config.json'), JSON.stringify(config), 'utf8');
     const args = [VALIDATOR, 'validate-pack', dir];
     if (profile) args.push(`--${profile}`);
-    const result = spawnSync(process.execPath, args, { encoding: 'utf8' });
+    // cwd — временный каталог: иначе валидатор подхватит v8std.config.json проекта,
+    // в котором запущены тесты, и результат станет зависеть от места запуска.
+    const result = spawnSync(process.execPath, args, { encoding: 'utf8', cwd: dir });
     return { code: result.status, out: `${result.stdout}${result.stderr}` };
   } finally {
     rmSync(dir, { recursive: true, force: true });
