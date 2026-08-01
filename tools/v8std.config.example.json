@@ -1,0 +1,11 @@
+{
+  "profile": "gate",
+
+  "phases": ["design", "implement", "review"],
+
+  "evidenceGlobs": ["**/v8std-evidence.md", "**/*-context.md", "**/task-log.md"],
+
+  "promoteReport": "final-report.md",
+
+  "sentinelId": "std450"
+}
