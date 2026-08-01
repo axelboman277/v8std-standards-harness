@@ -269,10 +269,24 @@ function collectRecords(taskDir, config) {
   for (const file of resolveEvidenceFiles(taskDir, config)) {
     const lines = fs.readFileSync(file, 'utf8').split(/\r?\n/);
     let inSection = false;
+    let inFence = false;
+    let fenceMarker = '';
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
-      if (/^##\s+v8std evidence\b/i.test(line)) { inSection = true; continue; }
-      if (inSection && /^##\s+\S/.test(line)) { inSection = false; }
+      // Различаем данные и иллюстрацию данных по положению ЗАГОЛОВКА секции, а не по
+      // наличию ограждения:
+      //   • заголовок внутри ``` — это пример в документации, записи под ним не считаются
+      //     (иначе пакет, положенный в проверяемое дерево, вечно удовлетворял бы гейт);
+      //   • заголовок снаружи — секция настоящая, и записи в ней считаются даже если
+      //     оформлены код-блоком (агенты часто так делают ради читаемости).
+      const fence = line.match(/^\s*(```+|~~~+)/);
+      if (fence) {
+        if (!inFence) { inFence = true; fenceMarker = fence[1][0]; }
+        else if (fence[1][0] === fenceMarker) { inFence = false; fenceMarker = ''; }
+        continue;
+      }
+      if (!inFence && /^##\s+v8std evidence\b/i.test(line)) { inSection = true; continue; }
+      if (!inFence && inSection && /^##\s+\S/.test(line)) { inSection = false; }
       if (!inSection || !/\[v8std\s+\w+:/.test(line)) continue;
       const record = parseEvidenceLine(line);
       if (!record) {

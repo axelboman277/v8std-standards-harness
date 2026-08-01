@@ -158,6 +158,40 @@ console.log('\n2. Fail-open регрессии (главная группа)');
   const { code, out } = run(files, { config });
   check('gate: фаза без единой записи даёт WARN', code === 1 && /phases without any evidence/.test(out), `exit=${code} ${out}`);
 }
+{
+  // Самоотравление документацией: примеры внутри ``` не должны считаться данными.
+  // Иначе положенный в репозиторий пакет сам себя «удовлетворяет» и гейт вечно зелёный.
+  const doc = [
+    '# Инструкция',
+    '',
+    'Минимальный носитель выглядит так:',
+    '',
+    '```markdown',
+    '## v8std evidence',
+    '',
+    SENTINEL,
+    APPLIED,
+    '```',
+    '',
+    'Конец примера.',
+  ].join('\n');
+  const { code, out } = run({ 'INSTALL.md': doc }, { profile: 'gate' });
+  check('gate: примеры в код-блоках не считаются записями', code === 2 && /No v8std evidence records/.test(out), `exit=${code} ${out}`);
+}
+{
+  // Обратная сторона: настоящие записи вне ограждений по-прежнему видны.
+  const mixed = `# Журнал\n\n\`\`\`bsl\nПроцедура Пример()\nКонецПроцедуры\n\`\`\`\n\n## v8std evidence\n\n${SENTINEL}\n${APPLIED}\n${DISCOVERED_NOT_RELEVANT}\n`;
+  const { code, out } = run({ 'log.md': mixed }, { profile: 'gate' });
+  check('gate: записи вне ограждений видны, соседний код-блок не мешает', code === 0, `exit=${code} ${out}`);
+}
+{
+  // Реальный паттерн: заголовок секции снаружи, а сами записи агент оформил код-блоком.
+  // Такие записи обязаны считаться — иначе привычка «обернуть для читаемости» делает
+  // работу невидимой для гейта.
+  const boxed = `# Журнал\n\n## v8std evidence\n\n\`\`\`\n${SENTINEL}\n${APPLIED}\n${DISCOVERED_NOT_RELEVANT}\n\`\`\`\n\nДетали ниже.\n`;
+  const { code, out } = run({ 'log.md': boxed }, { profile: 'gate' });
+  check('gate: заголовок снаружи + записи в код-блоке = записи считаются', code === 0, `exit=${code} ${out}`);
+}
 
 // --- итог --------------------------------------------------------------------
 
