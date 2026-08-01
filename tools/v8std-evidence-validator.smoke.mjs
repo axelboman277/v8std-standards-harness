@@ -179,6 +179,35 @@ console.log('\n1d. Правила gate');
   check('заголовок "## v8std evidence example" не считается секцией', code === 2 && /No v8std evidence records/.test(out), `exit=${code} ${out}`);
 }
 
+// --- 1e. Кодировка файла и закомментированные записи -------------------------
+
+console.log('\n1e. BOM, переносы строк, HTML-комментарии');
+
+{
+  // BOM появляется сам собой в Windows-редакторах. С ним первая строка перестаёт
+  // совпадать с заголовком секции, и весь файл молча считался пустым.
+  const withBom = `﻿# Журнал
+
+## v8std evidence
+
+${SENTINEL}
+${APPLIED}
+${DISCOVERED_NOT_RELEVANT}
+`;
+  const { code, out } = run({ 'log.md': withBom }, { config: { profile: 'gate', sentinelId: 'std450' } });
+  check('BOM + CRLF: файл читается нормально', code === 0, `exit=${code} ${out}`);
+}
+{
+  const onlyCommented = `# Журнал\n\n## v8std evidence\n\n<!--\n${SENTINEL}\n${APPLIED}\n-->\n`;
+  const { code, out } = run({ 'log.md': onlyCommented }, { config: { profile: 'gate', sentinelId: 'std450' } });
+  check('только закомментированные записи = BLOCK (выключенная работа не считается)', code === 2 && /No v8std evidence records/.test(out), `exit=${code} ${out}`);
+}
+{
+  const mixed = `# Журнал\n\n## v8std evidence\n\n<!-- отключено:\n[v8std applied: phase=x, scope=y, ids_checked=[], conclusion=clean]\n-->\n\n${SENTINEL}\n${APPLIED}\n${DISCOVERED_NOT_RELEVANT}\n`;
+  const { code, out } = run({ 'log.md': mixed }, { config: { profile: 'gate', sentinelId: 'std450' } });
+  check('комментарий пропущен, живые записи рядом читаются', code === 0, `exit=${code} ${out}`);
+}
+
 // --- 2. Fail-open регрессии --------------------------------------------------
 
 console.log('\n2. Fail-open регрессии (главная группа)');

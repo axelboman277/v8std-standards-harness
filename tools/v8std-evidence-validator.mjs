@@ -334,10 +334,14 @@ function validateRecord(record, file, lineNo, config) {
 function collectRecords(taskDir, config) {
   const collected = []; // {record, file, line}
   for (const file of resolveEvidenceFiles(taskDir, config)) {
-    const lines = fs.readFileSync(file, 'utf8').split(/\r?\n/);
+    // BOM обязателен к удалению: в Windows-редакторах он появляется сам собой, а с ним
+    // первая строка файла перестаёт совпадать с заголовком секции — и весь файл молча
+    // считается пустым.
+    const lines = fs.readFileSync(file, 'utf8').replace(/^﻿/, '').split(/\r?\n/);
     let inSection = false;
     let inFence = false;
     let fenceMarker = '';
+    let inComment = false;
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
       // Различаем данные и иллюстрацию данных по положению ЗАГОЛОВКА секции, а не по
@@ -351,6 +355,19 @@ function collectRecords(taskDir, config) {
         if (!inFence) { inFence = true; fenceMarker = fence[1][0]; }
         else if (fence[1][0] === fenceMarker) { inFence = false; fenceMarker = ''; }
         continue;
+      }
+      // Закомментированная запись — это выключенная запись. Засчитывать её значило бы
+      // дать удобный способ сохранить вид работы, отменив саму работу.
+      if (!inFence) {
+        const opens = (line.match(/<!--/g) || []).length;
+        const closes = (line.match(/-->/g) || []).length;
+        const singleLineComment = opens > 0 && closes > 0 && !inComment;
+        if (!inComment && opens > closes) { inComment = true; continue; }
+        if (inComment) {
+          if (closes > 0) inComment = false;
+          continue;
+        }
+        if (singleLineComment && /<!--[^]*\[v8std/.test(line)) continue;
       }
       // Заголовок распознаётся ТОЛЬКО целиком: `## v8std evidence example` — это раздел
       // документации про формат, а не секция с данными.
