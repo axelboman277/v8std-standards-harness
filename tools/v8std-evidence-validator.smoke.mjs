@@ -124,6 +124,15 @@ console.log('\n1b. Пустые значения (имитация провер�
   check('sentinel с невалидным id = BLOCK', code === 2 && /not a valid identifier/.test(out), `exit=${code} ${out}`);
 }
 
+{
+  // Конфиг с не-markdown целью. Фильтр по расширению не должен отменять явные globs,
+  // иначе настроенный конфиг молча не находит записи.
+  const files = { 'task-log.txt': evidence([SENTINEL, APPLIED, DISCOVERED_NOT_RELEVANT]) };
+  const config = { profile: 'gate', evidenceGlobs: ['**/task-log.txt'], sentinelId: 'std450' };
+  const { code, out } = run(files, { config });
+  check('evidenceGlobs на .txt: записи находятся, а не игнорируются', code === 0, `exit=${code} ${out}`);
+}
+
 // --- 2. Fail-open регрессии --------------------------------------------------
 
 console.log('\n2. Fail-open регрессии (главная группа)');

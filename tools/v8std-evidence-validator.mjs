@@ -140,8 +140,13 @@ function walkFiles(root) {
 }
 
 function resolveEvidenceFiles(taskDir, config) {
-  const all = walkFiles(taskDir).filter(f => f.toLowerCase().endsWith('.md'));
-  if (!config.evidenceGlobs || config.evidenceGlobs.length === 0) return all;
+  const all = walkFiles(taskDir);
+  // Без конфига ограничиваемся markdown — разумный дефолт. Но если globs заданы явно,
+  // фильтр по расширению применять НЕЛЬЗЯ: конфиг вида `**/task-log.txt` иначе молча
+  // не находил бы ничего, и пользователь получал бы «чисто» на ненайденных записях.
+  if (!config.evidenceGlobs || config.evidenceGlobs.length === 0) {
+    return all.filter(f => f.toLowerCase().endsWith('.md'));
+  }
   const matchers = config.evidenceGlobs.map(globToRegExp);
   return all.filter(file => {
     const rel = path.relative(taskDir, file).split(path.sep).join('/');
